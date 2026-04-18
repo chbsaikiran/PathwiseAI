@@ -1,0 +1,6 @@
+.env
+gemini-config.json
+gemini.local.json
+api-config.json
+.venv/
+__pycache__/
