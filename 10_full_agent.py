@@ -1,5 +1,5 @@
 """
-YouTube channel discovery agent (Gemini + single tool).
+YouTube channel discovery + viewer-sentiment agent (Gemini + tools).
 
 Before running:
   pip install -r requirements.txt
@@ -22,6 +22,7 @@ import time
 from dotenv import load_dotenv
 
 from get_youtube_channels import get_top_youtube_channels
+from youtube_channel_comments import analyze_channel_viewer_comments
 
 load_dotenv()
 
@@ -43,33 +44,43 @@ def call_llm(prompt: str, emit: Callable[[str], None] | None = None) -> str:
     return response.text
 
 
-system_prompt = """You are an assistant that finds top YouTube channels for a topic using one tool.
+system_prompt = """You are an assistant for YouTube discovery and audience tone. You have two tools.
 
-Tool: get_top_youtube_channels(query: str, max_pages: int = 2) -> str
+Tool 1 — get_top_youtube_channels(query: str, max_pages: int = 2) -> str
   Searches YouTube for channels matching `query`, scores them, returns JSON with up to 5 channels.
-  Each channel includes: title, channel_id, url (clickable channel link), subscribers, views, videos, score.
-  Optional max_pages (default 2) controls how many search result pages to fetch (1–5 is reasonable).
+  Each channel: title, channel_id, url, subscribers, views, videos, score.
+  max_pages (default 2) is how many search pages to pull (1–10 reasonable).
+
+Tool 2 — analyze_channel_viewer_sentiment(channel_link: str, top_videos: int = 5, comments_per_video: int = 20) -> str
+  Takes a channel URL (e.g. https://www.youtube.com/@handle or /channel/UC…) or a UC… id.
+  Fetches the channel's top videos by view count (up to top_videos), collects top-level comments
+  (up to comments_per_video per video), returns JSON: channel_title, channel_url, videos_analyzed
+  (each with title, url, sample_comments), collated_comment_text, and a note about bias.
+  Your job after this tool: write a clear "what viewers seem to say" summary from those comments only
+  (themes, praise, complaints, memes, requests — no inventing beyond the samples).
 
 You must respond with ONLY JSON — no markdown fences around the whole message, no extra text:
 
-To call the tool:
-{"tool_name": "get_top_youtube_channels", "tool_arguments": {"query": "<search phrase>", "max_pages": 2}}
+To call a tool:
+{"tool_name": "<get_top_youtube_channels|analyze_channel_viewer_sentiment>", "tool_arguments": {...}}
 
-For the final reply, use this exact JSON shape (answer is one string; use \\n for newlines inside it):
-{"answer": "<formatted string>"}
+For the final reply:
+{"answer": "<formatted string; use \\n for newlines>"}
 
-Final answer formatting rules (inside the answer string):
-- Start with one short intro sentence, then a blank line (\\n\\n).
-- For each channel from the tool JSON, use a numbered list: "1. ", "2. ", etc.
-- Each list item MUST use a markdown link with the exact url from the data: [Channel Title](url)
-  Never invent or shorten URLs — copy url exactly from the tool result.
-- On the next line(s) in the same list item, indent with two spaces and show: subscribers, total views, video count (human-readable, e.g. "1.2M subscribers").
-- End with a blank line and a brief "Why these picks" line tied to score or relevance.
-- If the tool returned an error object, explain it helpfully without fabricating channels.
+Final answer formatting:
+- If the user only asked for channel discovery (tool 1): intro sentence, blank line, numbered list with
+  [Channel Title](url) using exact urls from JSON, stats on indented lines, then "Why these picks".
+- If the user only asked about sentiment / what people say (tool 2): intro, blank line, section
+  **What viewers say** with 2–5 sentences synthesizing comment samples; optional short bullets; mention
+  videos you drew from (titles or links from JSON only). If comments were empty/disabled, say so honestly.
+- If you used both tools: include both sections in one answer in a sensible order.
+- If any tool returned {"error": ...}, explain it without fabricating data.
 
 Rules:
-- Use get_top_youtube_channels whenever the user wants channels, creators, or YouTube discovery for a topic.
-- After tool results, always include every channel returned with its link and stats in the formatted answer.
+- Use tool 1 for "find channels about …", discovery, comparisons of channels by topic.
+- Use tool 2 when the user gives a channel link/id or asks what viewers think, audience reception, vibe, etc.
+- You may call tools in sequence (e.g. find channels then analyze one link from the results).
+- Never invent channel URLs or comment quotes; only use strings present in tool JSON.
 """
 
 
@@ -86,8 +97,35 @@ def get_top_youtube_channels_tool(query: str, max_pages: int = 2) -> str:
         return json.dumps({"error": str(e)})
 
 
+def analyze_channel_viewer_sentiment_tool(
+    channel_link: str,
+    top_videos: int = 5,
+    comments_per_video: int = 20,
+) -> str:
+    try:
+        top_videos = int(top_videos)
+        top_videos = max(1, min(top_videos, 10))
+    except (TypeError, ValueError):
+        top_videos = 5
+    try:
+        comments_per_video = int(comments_per_video)
+        comments_per_video = max(1, min(comments_per_video, 50))
+    except (TypeError, ValueError):
+        comments_per_video = 20
+    try:
+        payload = analyze_channel_viewer_comments(
+            channel_link,
+            top_videos=top_videos,
+            comments_per_video=comments_per_video,
+        )
+        return json.dumps(payload)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 tools = {
     "get_top_youtube_channels": get_top_youtube_channels_tool,
+    "analyze_channel_viewer_sentiment": analyze_channel_viewer_sentiment_tool,
 }
 
 
@@ -116,7 +154,7 @@ def parse_llm_response(text: str) -> dict:
 
 def run_agent(
     user_query: str,
-    max_iterations: int = 5,
+    max_iterations: int = 8,
     verbose: bool = True,
     logs: list[str] | None = None,
 ) -> str | None:
