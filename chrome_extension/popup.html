@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PathwiseAI</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>PathwiseAI</h1>
+    <p class="sub">YouTube channel agent — local server. Runs in the background; logs and answer stay until you clear.</p>
+  </header>
+
+  <label class="label" for="baseUrl">Server base URL</label>
+  <input type="url" id="baseUrl" placeholder="http://127.0.0.1:8765" autocomplete="off" />
+
+  <label class="label" for="prompt">Prompt</label>
+  <textarea id="prompt" rows="4" placeholder="e.g. Find top YouTube channels about reinforcement learning."></textarea>
+
+  <div class="row">
+    <button type="button" id="runBtn">Run agent</button>
+    <button type="button" id="clearBtn" class="secondary">Clear logs</button>
+  </div>
+  <p id="status" class="status" aria-live="polite"></p>
+
+  <section>
+    <h2>LLM &amp; agent logs</h2>
+    <pre id="logs" class="panel"></pre>
+  </section>
+
+  <section>
+    <h2>Answer</h2>
+    <div id="answer" class="panel answer"></div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

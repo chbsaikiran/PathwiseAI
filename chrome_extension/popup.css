@@ -1,0 +1,139 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 420px;
+  margin: 0;
+  padding: 12px 14px 16px;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  color: #e8eaed;
+  background: #1e1e2e;
+}
+
+header h1 {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.sub {
+  margin: 0 0 12px;
+  color: #a6adc8;
+  font-size: 12px;
+}
+
+.label {
+  display: block;
+  margin: 10px 0 4px;
+  color: #bac2de;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#baseUrl {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  background: #181825;
+  color: #cdd6f4;
+  font-size: 12px;
+}
+
+#prompt {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  background: #181825;
+  color: #cdd6f4;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 88px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+button {
+  flex: 1;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  background: #89b4fa;
+  color: #11111b;
+}
+
+button:hover {
+  filter: brightness(1.05);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  flex: 0 0 auto;
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.status {
+  min-height: 1.2em;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #f9e2af;
+}
+
+section h2 {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9399b2;
+}
+
+.panel {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #11111b;
+  border: 1px solid #313244;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #a6e3a1;
+}
+
+.panel.answer {
+  color: #cdd6f4;
+  font-size: 12px;
+  max-height: 280px;
+}
+
+.panel.answer a {
+  color: #89b4fa;
+}
+
+#logs:empty::before {
+  content: "(no logs yet)";
+  color: #6c7086;
+}
+
+#answer:empty::before {
+  content: "(answer appears here)";
+  color: #6c7086;
+}

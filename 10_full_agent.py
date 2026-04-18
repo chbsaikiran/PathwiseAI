@@ -2,12 +2,18 @@
 YouTube channel discovery agent (Gemini + single tool).
 
 Before running:
-  pip install google-genai python-dotenv requests
+  pip install -r requirements.txt
   Create a .env file with:
     GEMINI_API_KEY=...
     YOUTUBE_API_KEY=...   (YouTube Data API v3 key)
     GEMINI_MODEL=gemini-3.1-flash-lite-preview   (optional)
+
+Chrome extension: load chrome_extension/ in Chrome; start the local API with:
+  uvicorn extension_server:app --host 127.0.0.1 --port 8765
 """
+from __future__ import annotations
+
+from collections.abc import Callable
 from google import genai
 import json
 import re
@@ -29,8 +35,9 @@ if not GEMINI_API_KEY:
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
-def call_llm(prompt: str) -> str:
-    print(f"  [waiting {THROTTLE_SECONDS}s to respect rate limits...]", flush=True)
+def call_llm(prompt: str, emit: Callable[[str], None] | None = None) -> str:
+    _emit = emit or print
+    _emit(f"  [waiting {THROTTLE_SECONDS}s to respect rate limits...]")
     time.sleep(THROTTLE_SECONDS)
     response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
     return response.text
@@ -107,9 +114,19 @@ def parse_llm_response(text: str) -> dict:
     raise ValueError(f"Could not parse LLM response: {text[:200]}")
 
 
-def run_agent(user_query: str, max_iterations: int = 5, verbose: bool = True):
-    if verbose:
-        print(f"\n{'='*60}\n  User: {user_query}\n{'='*60}")
+def run_agent(
+    user_query: str,
+    max_iterations: int = 5,
+    verbose: bool = True,
+    logs: list[str] | None = None,
+) -> str | None:
+    def emit(msg: str) -> None:
+        if logs is not None:
+            logs.append(msg)
+        elif verbose:
+            print(msg)
+
+    emit(f"\n{'='*60}\n  User: {user_query}\n{'='*60}")
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -117,8 +134,7 @@ def run_agent(user_query: str, max_iterations: int = 5, verbose: bool = True):
     ]
 
     for iteration in range(max_iterations):
-        if verbose:
-            print(f"\n--- Iteration {iteration + 1} ---")
+        emit(f"\n--- Iteration {iteration + 1} ---")
 
         prompt = ""
         for msg in messages:
@@ -131,15 +147,13 @@ def run_agent(user_query: str, max_iterations: int = 5, verbose: bool = True):
             elif msg["role"] == "tool":
                 prompt += f"Tool Result: {msg['content']}\n\n"
 
-        response_text = call_llm(prompt)
-        if verbose:
-            print(f"LLM: {response_text.strip()}")
+        response_text = call_llm(prompt, emit=emit)
+        emit(f"LLM: {response_text.strip()}")
 
         try:
             parsed = parse_llm_response(response_text)
         except (ValueError, json.JSONDecodeError) as e:
-            if verbose:
-                print(f"Parse error: {e}\nAsking LLM to retry...")
+            emit(f"Parse error: {e}\nAsking LLM to retry...")
             messages.append({"role": "assistant", "content": response_text})
             messages.append(
                 {
@@ -150,37 +164,33 @@ def run_agent(user_query: str, max_iterations: int = 5, verbose: bool = True):
             continue
 
         if "answer" in parsed:
-            if verbose:
-                print(f"\n{'='*60}\n  Agent Answer: {parsed['answer']}\n{'='*60}")
+            emit(f"\n{'='*60}\n  Agent Answer: {parsed['answer']}\n{'='*60}")
             return parsed["answer"]
 
         if "tool_name" in parsed:
             tool_name = parsed["tool_name"]
             tool_args = parsed.get("tool_arguments", {})
-            if verbose:
-                print(f"→ Calling tool: {tool_name}({tool_args})")
+            emit(f"→ Calling tool: {tool_name}({tool_args})")
 
             if tool_name not in tools:
                 error_msg = json.dumps(
                     {"error": f"Unknown tool: {tool_name}. Use: {list(tools.keys())}"}
                 )
-                if verbose:
-                    print(f"→ Error: {error_msg}")
+                emit(f"→ Error: {error_msg}")
                 messages.append({"role": "assistant", "content": response_text})
                 messages.append({"role": "tool", "content": error_msg})
                 continue
 
             tool_result = tools[tool_name](**tool_args)
-            if verbose:
-                print(f"→ Result: {tool_result[:500]}{'...' if len(tool_result) > 500 else ''}")
+            preview = tool_result[:500] + ("..." if len(tool_result) > 500 else "")
+            emit(f"→ Result: {preview}")
             messages.append({"role": "assistant", "content": response_text})
             messages.append({"role": "tool", "content": tool_result})
 
-    print("\nMax iterations reached. Agent could not complete the task.")
-    if verbose:
-        print(f"\n{'='*60}\nFull conversation history:\n{'='*60}")
-        for i, msg in enumerate(messages):
-            print(f"[{i}] {msg['role']}: {msg['content'][:100]}...")
+    emit("\nMax iterations reached. Agent could not complete the task.")
+    emit(f"\n{'='*60}\nFull conversation history:\n{'='*60}")
+    for i, msg in enumerate(messages):
+        emit(f"[{i}] {msg['role']}: {msg['content'][:100]}...")
     return None
 
 
