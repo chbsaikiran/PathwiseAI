@@ -7,6 +7,7 @@ Before running:
     GEMINI_API_KEY=...
     YOUTUBE_API_KEY=...   (YouTube Data API v3 key)
     GEMINI_MODEL=gemini-3.1-flash-lite-preview   (optional)
+    GEMINI_THROTTLE_SECONDS=12   (optional; seconds between Gemini calls, reduces 503 bursts)
 
 Chrome extension: load chrome_extension/ in Chrome; start the local API with:
   uvicorn extension_server:app --host 127.0.0.1 --port 8765
@@ -28,7 +29,8 @@ load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
-THROTTLE_SECONDS = 10
+# Slightly higher default + env override reduces Gemini 503 "too many requests" bursts.
+THROTTLE_SECONDS = float(os.getenv("GEMINI_THROTTLE_SECONDS", "12"))
 
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not set. Create a .env file with GEMINI_API_KEY=...")
@@ -36,50 +38,86 @@ if not GEMINI_API_KEY:
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
+def _gemini_retryable(exc: BaseException) -> bool:
+    text = (repr(exc) + " " + str(exc)).lower()
+    return any(
+        k in text
+        for k in (
+            "503",
+            "429",
+            "resource exhausted",
+            "unavailable",
+            "overloaded",
+            "deadline exceeded",
+            "500",
+            "internal error",
+            "too many requests",
+        )
+    )
+
+
 def call_llm(prompt: str, emit: Callable[[str], None] | None = None) -> str:
     _emit = emit or print
-    _emit(f"  [waiting {THROTTLE_SECONDS}s to respect rate limits...]")
-    time.sleep(THROTTLE_SECONDS)
-    response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-    return response.text
+    max_attempts = 6
+    last_exc: BaseException | None = None
+    for attempt in range(max_attempts):
+        if attempt == 0:
+            _emit(f"  [waiting {THROTTLE_SECONDS}s to respect rate limits...]")
+            time.sleep(THROTTLE_SECONDS)
+        else:
+            backoff = min(6.0 * (2 ** (attempt - 1)), 120.0)
+            _emit(f"  [Gemini busy or rate-limited; waiting {backoff:.0f}s (retry {attempt + 1}/{max_attempts})...]")
+            time.sleep(backoff)
+        try:
+            response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            return response.text
+        except BaseException as e:
+            last_exc = e
+            if attempt < max_attempts - 1 and _gemini_retryable(e):
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
 
 
-system_prompt = """You are an assistant for YouTube discovery and audience tone. You have two tools.
+system_prompt = """You are an assistant for YouTube discovery and audience tone. You have three tools.
 
 Tool 1 — get_top_youtube_channels(query: str, max_pages: int = 2) -> str
   Searches YouTube for channels matching `query`, scores them, returns JSON with up to 5 channels.
   Each channel: title, channel_id, url, subscribers, views, videos, score.
   max_pages (default 2) is how many search pages to pull (1–10 reasonable).
 
-Tool 2 — analyze_channel_viewer_sentiment(channel_link: str, top_videos: int = 5, comments_per_video: int = 20) -> str
+Tool 2 — analyze_channel_viewer_sentiment(channel_link: str, top_videos: int = 4, comments_per_video: int = 12) -> str
   Takes a channel URL (e.g. https://www.youtube.com/@handle or /channel/UC…) or a UC… id.
-  Fetches the channel's top videos by view count (up to top_videos), collects top-level comments
-  (up to comments_per_video per video), returns JSON: channel_title, channel_url, videos_analyzed
-  (each with title, url, sample_comments), collated_comment_text, and a note about bias.
-  Your job after this tool: write a clear "what viewers seem to say" summary from those comments only
-  (themes, praise, complaints, memes, requests — no inventing beyond the samples).
+  Fetches top videos by view count (search order), collects top-level comments per video.
+  Returns JSON: channel_title, channel_url, videos_analyzed (title, url, sample_comments),
+  collated_comment_text, note. Summarize viewer themes only from that JSON.
+
+Tool 3 — discover_channels_and_top_audience(query: str, max_pages: int = 1, top_videos: int = 4, comments_per_video: int = 12) -> str
+  ONE call that: (a) finds top channels like tool 1, then (b) runs sentiment on the #1 channel (highest score).
+  Returns JSON with "channels" (same shape as tool 1) and "top_channel_sentiment" (same shape as tool 2 output).
+  Prefer this tool whenever the user wants "top channels on X AND what people say about the top/first/best one"
+  in a single answer — it uses fewer round-trips and is gentler on APIs than tool 1 + tool 2 separately.
 
 You must respond with ONLY JSON — no markdown fences around the whole message, no extra text:
 
 To call a tool:
-{"tool_name": "<get_top_youtube_channels|analyze_channel_viewer_sentiment>", "tool_arguments": {...}}
+{"tool_name": "<get_top_youtube_channels|analyze_channel_viewer_sentiment|discover_channels_and_top_audience>", "tool_arguments": {...}}
 
 For the final reply:
 {"answer": "<formatted string; use \\n for newlines>"}
 
 Final answer formatting:
-- If the user only asked for channel discovery (tool 1): intro sentence, blank line, numbered list with
-  [Channel Title](url) using exact urls from JSON, stats on indented lines, then "Why these picks".
-- If the user only asked about sentiment / what people say (tool 2): intro, blank line, section
-  **What viewers say** with 2–5 sentences synthesizing comment samples; optional short bullets; mention
-  videos you drew from (titles or links from JSON only). If comments were empty/disabled, say so honestly.
-- If you used both tools: include both sections in one answer in a sensible order.
+- Discovery only (tool 1): intro, blank line, numbered [Title](url) with exact urls, stats lines, "Why these picks".
+- Sentiment only (tool 2): intro, **What viewers say** section (2–5 sentences + optional bullets from samples only).
+- Combined discovery + top-channel audience: if you used tool 3, list ALL channels from "channels" like tool 1,
+  then a **What viewers say about [top channel title]** section from "top_channel_sentiment" only.
+  If you used tools 1 then 2 instead, same layout: all channels, then sentiment for the analyzed channel.
 - If any tool returned {"error": ...}, explain it without fabricating data.
 
 Rules:
-- Use tool 1 for "find channels about …", discovery, comparisons of channels by topic.
-- Use tool 2 when the user gives a channel link/id or asks what viewers think, audience reception, vibe, etc.
-- You may call tools in sequence (e.g. find channels then analyze one link from the results).
+- For "find channels … and what people say about the top one" → use tool 3 by default (query = topic).
+- Use tool 1 alone when the user only wants a channel list. Use tool 2 alone when they already give a link/handle.
 - Never invent channel URLs or comment quotes; only use strings present in tool JSON.
 """
 
@@ -99,19 +137,19 @@ def get_top_youtube_channels_tool(query: str, max_pages: int = 2) -> str:
 
 def analyze_channel_viewer_sentiment_tool(
     channel_link: str,
-    top_videos: int = 5,
-    comments_per_video: int = 20,
+    top_videos: int = 4,
+    comments_per_video: int = 12,
 ) -> str:
     try:
         top_videos = int(top_videos)
         top_videos = max(1, min(top_videos, 10))
     except (TypeError, ValueError):
-        top_videos = 5
+        top_videos = 4
     try:
         comments_per_video = int(comments_per_video)
         comments_per_video = max(1, min(comments_per_video, 50))
     except (TypeError, ValueError):
-        comments_per_video = 20
+        comments_per_video = 12
     try:
         payload = analyze_channel_viewer_comments(
             channel_link,
@@ -123,9 +161,58 @@ def analyze_channel_viewer_sentiment_tool(
         return json.dumps({"error": str(e)})
 
 
+def discover_channels_and_top_audience_tool(
+    query: str,
+    max_pages: int = 1,
+    top_videos: int = 4,
+    comments_per_video: int = 12,
+) -> str:
+    try:
+        max_pages = int(max_pages)
+        max_pages = max(1, min(max_pages, 5))
+    except (TypeError, ValueError):
+        max_pages = 1
+    try:
+        top_videos = int(top_videos)
+        top_videos = max(1, min(top_videos, 10))
+    except (TypeError, ValueError):
+        top_videos = 4
+    try:
+        comments_per_video = int(comments_per_video)
+        comments_per_video = max(1, min(comments_per_video, 50))
+    except (TypeError, ValueError):
+        comments_per_video = 12
+    try:
+        rows = get_top_youtube_channels(query, max_pages=max_pages)
+        if not rows:
+            return json.dumps(
+                {
+                    "channels": [],
+                    "top_channel_rank": None,
+                    "top_channel_sentiment": {"note": "No channels matched the query after filtering."},
+                }
+            )
+        link = rows[0]["url"]
+        sentiment = analyze_channel_viewer_comments(
+            link,
+            top_videos=top_videos,
+            comments_per_video=comments_per_video,
+        )
+        return json.dumps(
+            {
+                "channels": rows,
+                "top_channel_rank": 1,
+                "top_channel_sentiment": sentiment,
+            }
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 tools = {
     "get_top_youtube_channels": get_top_youtube_channels_tool,
     "analyze_channel_viewer_sentiment": analyze_channel_viewer_sentiment_tool,
+    "discover_channels_and_top_audience": discover_channels_and_top_audience_tool,
 }
 
 

@@ -1,6 +1,6 @@
 """
 Fetch comment samples from a channel's top videos (by view count) via YouTube Data API v3.
-Used by the agent tool analyze_channel_viewer_sentiment.
+Uses search-only video listing (no extra videos.list batch) and shared retrying HTTP client.
 """
 
 from __future__ import annotations
@@ -10,12 +10,13 @@ import re
 import time
 from urllib.parse import parse_qs, urlparse
 
-import requests
+from youtube_http import youtube_api_get
 
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
-VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 COMMENTS_URL = "https://www.googleapis.com/youtube/v3/commentThreads"
+
+COMMENT_GAP_S = 0.28
 
 
 def _api_key() -> str:
@@ -25,27 +26,40 @@ def _api_key() -> str:
     return k
 
 
+def _snippet_channel_url(channel_id: str, snippet: dict) -> str:
+    custom = (snippet.get("customUrl") or "").strip().lstrip("@")
+    if custom:
+        return f"https://www.youtube.com/@{custom}"
+    return f"https://www.youtube.com/channel/{channel_id}"
+
+
 def _channels_list(api_key: str, **params: str) -> dict:
     merged = {**params, "key": api_key}
-    return requests.get(CHANNELS_URL, params=merged, timeout=30).json()
+    return youtube_api_get(CHANNELS_URL, merged)
 
 
-def _resolve_channel(api_key: str, channel_input: str) -> tuple[str, str]:
-    """Return (channel_id, channel_title) or raise ValueError."""
+def _raise_if_youtube_error(data: dict) -> None:
+    err = data.get("error")
+    if err:
+        raise RuntimeError(err.get("message", str(err)))
+
+
+def _resolve_channel(api_key: str, channel_input: str) -> tuple[str, str, str]:
+    """Return (channel_id, channel_title, channel_url) or raise ValueError."""
     raw = channel_input.strip()
     if not raw:
         raise ValueError("Empty channel link.")
 
-    # Bare channel ID
     if re.fullmatch(r"UC[\w-]{22}", raw):
         cid = raw
         data = _channels_list(api_key, part="snippet", id=cid)
+        _raise_if_youtube_error(data)
         items = data.get("items") or []
         if not items:
             raise ValueError(f"No channel found for id {cid}.")
-        return cid, items[0]["snippet"]["title"]
+        sn = items[0]["snippet"]
+        return cid, sn["title"], _snippet_channel_url(cid, sn)
 
-    # URL or path-like string
     if not raw.startswith("http"):
         raw = "https://" + raw.lstrip("/")
 
@@ -60,30 +74,36 @@ def _resolve_channel(api_key: str, channel_input: str) -> tuple[str, str]:
     if m:
         cid = m.group(1)
         data = _channels_list(api_key, part="snippet", id=cid)
+        _raise_if_youtube_error(data)
         items = data.get("items") or []
         if not items:
             raise ValueError(f"No channel found for id {cid}.")
-        return cid, items[0]["snippet"]["title"]
+        sn = items[0]["snippet"]
+        return cid, sn["title"], _snippet_channel_url(cid, sn)
 
     m = re.search(r"/@([\w.-]+)", path)
     if m:
         handle = m.group(1)
         data = _channels_list(api_key, part="snippet", forHandle=handle)
+        _raise_if_youtube_error(data)
         items = data.get("items") or []
         if not items:
             raise ValueError(f"No channel found for handle @{handle}.")
         cid = items[0]["id"]
-        return cid, items[0]["snippet"]["title"]
+        sn = items[0]["snippet"]
+        return cid, sn["title"], _snippet_channel_url(cid, sn)
 
     qs = parse_qs(parsed.query)
     if "channel_id" in qs and qs["channel_id"]:
         cid = qs["channel_id"][0].strip()
         if re.fullmatch(r"UC[\w-]{22}", cid):
             data = _channels_list(api_key, part="snippet", id=cid)
+            _raise_if_youtube_error(data)
             items = data.get("items") or []
             if not items:
                 raise ValueError(f"No channel found for id {cid}.")
-            return cid, items[0]["snippet"]["title"]
+            sn = items[0]["snippet"]
+            return cid, sn["title"], _snippet_channel_url(cid, sn)
 
     raise ValueError(
         "Could not parse channel URL. Use /channel/UC… or /@handle (or paste the 24-char channel id)."
@@ -91,7 +111,7 @@ def _resolve_channel(api_key: str, channel_input: str) -> tuple[str, str]:
 
 
 def _top_videos_by_views(api_key: str, channel_id: str, max_videos: int) -> list[dict]:
-    """Most-viewed videos on the channel (search order=viewCount)."""
+    """Top videos by view count using search.list only (saves one videos.list quota batch)."""
     params = {
         "part": "snippet",
         "type": "video",
@@ -100,37 +120,23 @@ def _top_videos_by_views(api_key: str, channel_id: str, max_videos: int) -> list
         "maxResults": min(max_videos, 50),
         "key": api_key,
     }
-    res = requests.get(SEARCH_URL, params=params, timeout=30).json()
+    res = youtube_api_get(SEARCH_URL, params)
+    _raise_if_youtube_error(res)
     items = res.get("items") or []
-    if not items:
-        return []
-
-    ids = [it["id"]["videoId"] for it in items if it.get("id", {}).get("videoId")]
-    if not ids:
-        return []
-
-    time.sleep(0.15)
-    vparams = {
-        "part": "snippet,statistics",
-        "id": ",".join(ids),
-        "key": api_key,
-    }
-    vres = requests.get(VIDEOS_URL, params=vparams, timeout=30).json()
-    out = []
-    for it in vres.get("items") or []:
-        vid = it["id"]
-        sn = it["snippet"]
-        stats = it.get("statistics") or {}
-        views = int(stats.get("viewCount", 0))
+    out: list[dict] = []
+    for it in items:
+        vid = it.get("id", {}).get("videoId")
+        if not vid:
+            continue
+        sn = it.get("snippet") or {}
         out.append(
             {
                 "video_id": vid,
                 "title": sn.get("title", ""),
                 "url": f"https://www.youtube.com/watch?v={vid}",
-                "view_count": views,
+                "view_count": None,
             }
         )
-    out.sort(key=lambda x: x["view_count"], reverse=True)
     return out[:max_videos]
 
 
@@ -143,7 +149,7 @@ def _fetch_top_comments(api_key: str, video_id: str, max_comments: int) -> list[
         "textFormat": "plainText",
         "key": api_key,
     }
-    res = requests.get(COMMENTS_URL, params=params, timeout=30).json()
+    res = youtube_api_get(COMMENTS_URL, params)
     if res.get("error"):
         err = res["error"]
         reason = (err.get("errors") or [{}])[0].get("reason", "")
@@ -165,46 +171,37 @@ def _fetch_top_comments(api_key: str, video_id: str, max_comments: int) -> list[
 
 def analyze_channel_viewer_comments(
     channel_link: str,
-    top_videos: int = 5,
-    comments_per_video: int = 20,
+    top_videos: int = 4,
+    comments_per_video: int = 12,
 ) -> dict:
     """
-    Resolve channel, take top `top_videos` by view count, pull up to `comments_per_video`
-    top-level comments per video, return structured data for the LLM to summarize.
+    Resolve channel, take top `top_videos` by view count (search order), pull comments.
+    Defaults are tuned to reduce quota bursts (combo workflow friendly).
     """
     api_key = _api_key()
     top_videos = max(1, min(int(top_videos), 10))
     comments_per_video = max(1, min(int(comments_per_video), 50))
 
-    channel_id, channel_title = _resolve_channel(api_key, channel_link)
-    time.sleep(0.15)
+    channel_id, channel_title, channel_url = _resolve_channel(api_key, channel_link)
+    time.sleep(0.2)
 
     videos = _top_videos_by_views(api_key, channel_id, top_videos)
     if not videos:
         return {
             "channel_id": channel_id,
             "channel_title": channel_title,
-            "channel_url": f"https://www.youtube.com/channel/{channel_id}",
+            "channel_url": channel_url,
             "videos_analyzed": [],
             "collated_comment_text": "",
             "note": "No public videos found for this channel (or search returned empty).",
         }
 
-    custom = ""
-    ch = _channels_list(api_key, part="snippet", id=channel_id)
-    if ch.get("items"):
-        cu = (ch["items"][0]["snippet"].get("customUrl") or "").strip().lstrip("@")
-        if cu:
-            custom = cu
-    channel_url = (
-        f"https://www.youtube.com/@{custom}" if custom else f"https://www.youtube.com/channel/{channel_id}"
-    )
-
     analyzed: list[dict] = []
     collated_parts: list[str] = []
 
-    for v in videos:
-        time.sleep(0.15)
+    for idx, v in enumerate(videos):
+        if idx > 0:
+            time.sleep(COMMENT_GAP_S)
         try:
             comments = _fetch_top_comments(api_key, v["video_id"], comments_per_video)
         except Exception as e:
@@ -234,7 +231,7 @@ def analyze_channel_viewer_comments(
         collated_parts.append(f"## Video: {v['title']}\n" + "\n".join(f"- {c}" for c in comments))
 
     collated = "\n\n".join(collated_parts)
-    max_chars = 14000
+    max_chars = 10000
     if len(collated) > max_chars:
         collated = collated[: max_chars - 3] + "..."
 
@@ -245,7 +242,7 @@ def analyze_channel_viewer_comments(
         "videos_analyzed": analyzed,
         "collated_comment_text": collated,
         "note": (
-            "Synthesize what viewers seem to value, criticize, or joke about across these samples. "
-            "Comments are a biased sample (engaged viewers, not everyone)."
+            "Videos are ordered by view count via YouTube search (per-video view_count omitted to save quota). "
+            "Synthesize viewer themes from samples only; comments are biased."
         ),
     }

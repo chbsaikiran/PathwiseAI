@@ -1,13 +1,20 @@
 import os
-import requests
 import math
 import time
 
+from youtube_http import youtube_api_get
+
+SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
+CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
+
+
+def _raise_if_youtube_error(data: dict) -> None:
+    err = data.get("error")
+    if err:
+        raise RuntimeError(err.get("message", str(err)))
+
 
 def get_top_youtube_channels(query, max_pages=2):
-    search_url = "https://www.googleapis.com/youtube/v3/search"
-    channels_url = "https://www.googleapis.com/youtube/v3/channels"
-
     api_key = os.getenv("YOUTUBE_API_KEY", "")
     if not api_key:
         raise RuntimeError("YOUTUBE_API_KEY not set. Add it to your .env file.")
@@ -15,7 +22,6 @@ def get_top_youtube_channels(query, max_pages=2):
     all_channel_ids = set()
     next_page_token = None
 
-    # Step 1: Search channels (pagination)
     for _ in range(max_pages):
         params = {
             "part": "snippet",
@@ -26,7 +32,8 @@ def get_top_youtube_channels(query, max_pages=2):
             "pageToken": next_page_token,
         }
 
-        res = requests.get(search_url, params=params).json()
+        res = youtube_api_get(SEARCH_URL, params)
+        _raise_if_youtube_error(res)
 
         for item in res.get("items", []):
             all_channel_ids.add(item["snippet"]["channelId"])
@@ -35,9 +42,8 @@ def get_top_youtube_channels(query, max_pages=2):
         if not next_page_token:
             break
 
-        time.sleep(0.2)
+        time.sleep(0.25)
 
-    # Step 2: Fetch stats
     channel_ids_list = list(all_channel_ids)
     channels = []
 
@@ -48,7 +54,8 @@ def get_top_youtube_channels(query, max_pages=2):
             "key": api_key,
         }
 
-        res = requests.get(channels_url, params=params).json()
+        res = youtube_api_get(CHANNELS_URL, params)
+        _raise_if_youtube_error(res)
 
         for item in res.get("items", []):
             stats = item["statistics"]
@@ -58,11 +65,9 @@ def get_top_youtube_channels(query, max_pages=2):
             views = int(stats.get("viewCount", 0))
             videos = int(stats.get("videoCount", 0))
 
-            # Filtering
             if subs < 1000 or videos < 10:
                 continue
 
-            # Scoring (log normalized)
             score = (
                 math.log(subs + 1) * 0.6
                 + math.log(views + 1) * 0.3
@@ -88,6 +93,5 @@ def get_top_youtube_channels(query, max_pages=2):
                 }
             )
 
-    # Sort and return top 5
     channels.sort(key=lambda x: x["score"], reverse=True)
     return channels[:5]

@@ -1,6 +1,6 @@
 # PathwiseAI
 
-A small **YouTube channel discovery agent** built for learning: it uses **Google Gemini** with a single tool that calls the **YouTube Data API v3**, scores channels, and returns top picks with links. You can run it as a **CLI script**, or through a **Chrome extension** that talks to a **local FastAPI server** (so API keys stay on your machine).
+A small **YouTube channel discovery agent** built for learning: it uses **Google Gemini** with tools that call the **YouTube Data API v3** (channel search, comment sampling, and a **combined** “top channels + audience read on #1” path to reduce API bursts). You can run it as a **CLI script**, or through a **Chrome extension** that talks to a **local FastAPI server** (so API keys stay on your machine).
 
 ## What is in this folder
 
@@ -8,6 +8,8 @@ A small **YouTube channel discovery agent** built for learning: it uses **Google
 |------|------|
 | `10_full_agent.py` | Agent loop, Gemini calls, tool wiring, optional CLI demo |
 | `get_youtube_channels.py` | `get_top_youtube_channels(query, max_pages)` — search + stats + scoring |
+| `youtube_channel_comments.py` | Comment samples for a channel’s top videos (by views) |
+| `youtube_http.py` | Shared YouTube GET with retry/backoff for 429/503 |
 | `extension_server.py` | Local HTTP API for the Chrome extension (`/api/run`, `/api/health`) |
 | `chrome_extension/` | Manifest V3 extension (popup UI, background service worker) |
 | `requirements.txt` | Python dependencies |
@@ -26,7 +28,10 @@ GEMINI_API_KEY=your-gemini-key
 YOUTUBE_API_KEY=your-youtube-data-api-key
 # Optional:
 # GEMINI_MODEL=gemini-3.1-flash-lite-preview
+# GEMINI_THROTTLE_SECONDS=12
 ```
+
+If Gemini often returns **503 / rate limit**, raise `GEMINI_THROTTLE_SECONDS` (for example `15` or `20`).
 
 Enable the **YouTube Data API v3** for the Google Cloud project that owns `YOUTUBE_API_KEY`.
 
