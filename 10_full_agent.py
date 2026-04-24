@@ -80,7 +80,7 @@ def call_llm(prompt: str, emit: Callable[[str], None] | None = None) -> str:
     raise last_exc
 
 
-system_prompt = """You are an assistant for YouTube discovery and audience tone. You have three tools.
+system_prompt = """You are an assistant for YouTube discovery and audience tone. You have two tools.
 
 Tool 1 — get_top_youtube_channels(query: str, max_pages: int = 2) -> str
   Searches YouTube for channels matching `query`, scores them, returns JSON with up to 5 channels.
@@ -93,16 +93,10 @@ Tool 2 — analyze_channel_viewer_sentiment(channel_link: str, top_videos: int =
   Returns JSON: channel_title, channel_url, videos_analyzed (title, url, sample_comments),
   collated_comment_text, note. Summarize viewer themes only from that JSON.
 
-Tool 3 — discover_channels_and_top_audience(query: str, max_pages: int = 1, top_videos: int = 4, comments_per_video: int = 12) -> str
-  ONE call that: (a) finds top channels like tool 1, then (b) runs sentiment on the #1 channel (highest score).
-  Returns JSON with "channels" (same shape as tool 1) and "top_channel_sentiment" (same shape as tool 2 output).
-  Prefer this tool whenever the user wants "top channels on X AND what people say about the top/first/best one"
-  in a single answer — it uses fewer round-trips and is gentler on APIs than tool 1 + tool 2 separately.
-
 You must respond with ONLY JSON — no markdown fences around the whole message, no extra text:
 
 To call a tool:
-{"tool_name": "<get_top_youtube_channels|analyze_channel_viewer_sentiment|discover_channels_and_top_audience>", "tool_arguments": {...}}
+{"tool_name": "<get_top_youtube_channels|analyze_channel_viewer_sentiment>", "tool_arguments": {...}}
 
 For the final reply:
 {"answer": "<formatted string; use \\n for newlines>"}
@@ -110,13 +104,12 @@ For the final reply:
 Final answer formatting:
 - Discovery only (tool 1): intro, blank line, numbered [Title](url) with exact urls, stats lines, "Why these picks".
 - Sentiment only (tool 2): intro, **What viewers say** section (2–5 sentences + optional bullets from samples only).
-- Combined discovery + top-channel audience: if you used tool 3, list ALL channels from "channels" like tool 1,
-  then a **What viewers say about [top channel title]** section from "top_channel_sentiment" only.
-  If you used tools 1 then 2 instead, same layout: all channels, then sentiment for the analyzed channel.
+- Combined discovery + top-channel audience: use tool 1 first, then tool 2 on the top-ranked channel URL.
+  In the final answer, list ALL channels first, then add **What viewers say about [top channel title]**.
 - If any tool returned {"error": ...}, explain it without fabricating data.
 
 Rules:
-- For "find channels … and what people say about the top one" → use tool 3 by default (query = topic).
+- For "find channels … and what people say about the top one": use tool 1, then tool 2 on rank #1 channel URL.
 - Use tool 1 alone when the user only wants a channel list. Use tool 2 alone when they already give a link/handle.
 - Never invent channel URLs or comment quotes; only use strings present in tool JSON.
 """
@@ -161,58 +154,9 @@ def analyze_channel_viewer_sentiment_tool(
         return json.dumps({"error": str(e)})
 
 
-def discover_channels_and_top_audience_tool(
-    query: str,
-    max_pages: int = 1,
-    top_videos: int = 4,
-    comments_per_video: int = 12,
-) -> str:
-    try:
-        max_pages = int(max_pages)
-        max_pages = max(1, min(max_pages, 5))
-    except (TypeError, ValueError):
-        max_pages = 1
-    try:
-        top_videos = int(top_videos)
-        top_videos = max(1, min(top_videos, 10))
-    except (TypeError, ValueError):
-        top_videos = 4
-    try:
-        comments_per_video = int(comments_per_video)
-        comments_per_video = max(1, min(comments_per_video, 50))
-    except (TypeError, ValueError):
-        comments_per_video = 12
-    try:
-        rows = get_top_youtube_channels(query, max_pages=max_pages)
-        if not rows:
-            return json.dumps(
-                {
-                    "channels": [],
-                    "top_channel_rank": None,
-                    "top_channel_sentiment": {"note": "No channels matched the query after filtering."},
-                }
-            )
-        link = rows[0]["url"]
-        sentiment = analyze_channel_viewer_comments(
-            link,
-            top_videos=top_videos,
-            comments_per_video=comments_per_video,
-        )
-        return json.dumps(
-            {
-                "channels": rows,
-                "top_channel_rank": 1,
-                "top_channel_sentiment": sentiment,
-            }
-        )
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
-
 tools = {
     "get_top_youtube_channels": get_top_youtube_channels_tool,
     "analyze_channel_viewer_sentiment": analyze_channel_viewer_sentiment_tool,
-    "discover_channels_and_top_audience": discover_channels_and_top_audience_tool,
 }
 
 

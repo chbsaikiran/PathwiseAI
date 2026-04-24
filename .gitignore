@@ -1,5 +1,6 @@
 # Secrets and local config
 .env
+Agent_Logs.txt
 gemini-config.json
 gemini.local.json
 api-config.json

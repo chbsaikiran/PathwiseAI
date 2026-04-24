@@ -1,6 +1,7 @@
 import os
 import math
 import time
+import re
 
 from youtube_http import youtube_api_get
 
@@ -12,6 +13,25 @@ def _raise_if_youtube_error(data: dict) -> None:
     err = data.get("error")
     if err:
         raise RuntimeError(err.get("message", str(err)))
+
+
+def _query_terms(query: str) -> list[str]:
+    # Keep meaningful alphanumeric tokens from query.
+    terms = re.findall(r"[a-zA-Z0-9]+", (query or "").lower())
+    return [t for t in terms if len(t) >= 2]
+
+
+def _description_matches_query(description: str, query: str) -> bool:
+    desc = (description or "").lower()
+    q = (query or "").strip().lower()
+    if not q:
+        return True
+    if q in desc:
+        return True
+    terms = _query_terms(q)
+    if not terms:
+        return False
+    return any(t in desc for t in terms)
 
 
 def get_top_youtube_channels(query, max_pages=2):
@@ -60,6 +80,11 @@ def get_top_youtube_channels(query, max_pages=2):
         for item in res.get("items", []):
             stats = item["statistics"]
             snippet = item["snippet"]
+            description = snippet.get("description", "")
+
+            # Hard filter: keep channels whose description matches user query.
+            if not _description_matches_query(description, query):
+                continue
 
             subs = int(stats.get("subscriberCount", 0))
             views = int(stats.get("viewCount", 0))
