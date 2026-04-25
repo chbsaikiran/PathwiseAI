@@ -8,6 +8,8 @@ Before running:
     YOUTUBE_API_KEY=...   (YouTube Data API v3 key)
     GEMINI_MODEL=gemini-3.1-flash-lite-preview   (optional)
     GEMINI_THROTTLE_SECONDS=12   (optional; seconds between Gemini calls, reduces 503 bursts)
+    YOUTUBE_RELEVANCE_LANGUAGE=hi   (optional; ISO 639-1, e.g. en, hi, te)
+    YOUTUBE_REGION_CODE=IN          (optional; ISO 3166-1 alpha-2, e.g. IN, US)
 
 Chrome extension: load chrome_extension/ in Chrome; start the local API with:
   uvicorn extension_server:app --host 127.0.0.1 --port 8765
@@ -24,6 +26,7 @@ from dotenv import load_dotenv
 
 from get_youtube_channels import get_top_youtube_channels
 from youtube_channel_comments import analyze_channel_viewer_comments
+from youtube_locale import effective_search_locale
 
 load_dotenv()
 
@@ -82,15 +85,20 @@ def call_llm(prompt: str, emit: Callable[[str], None] | None = None) -> str:
 
 system_prompt = """You are an assistant for YouTube discovery and audience tone. You have two tools.
 
-Tool 1 — get_top_youtube_channels(query: str, max_pages: int = 2) -> str
+Tool 1 — get_top_youtube_channels(query: str, max_pages: int = 2, relevance_language: optional, region_code: optional) -> str
   Searches YouTube for channels matching `query`, scores them, returns JSON with up to 5 channels.
   Each channel: title, channel_id, url, subscribers, views, videos, score.
   max_pages (default 2) is how many search pages to pull (1–10 reasonable).
+  relevance_language: ISO 639-1 two letters (e.g. "hi", "en", "te") — passed to YouTube search as relevanceLanguage.
+  region_code: ISO 3166-1 alpha-2 (e.g. "IN", "US") — passed as regionCode.
+  If omitted, values come from env YOUTUBE_RELEVANCE_LANGUAGE and YOUTUBE_REGION_CODE (can be unset for global results).
+  When the user asks for channels in a specific language/region, pass these arguments.
 
-Tool 2 — analyze_channel_viewer_sentiment(channel_link: str, top_videos: int = 4, comments_per_video: int = 12) -> str
+Tool 2 — analyze_channel_viewer_sentiment(channel_link: str, top_videos: int = 4, comments_per_video: int = 12, relevance_language: optional, region_code: optional) -> str
   Takes a channel URL (e.g. https://www.youtube.com/@handle or /channel/UC…) or a UC… id.
   Fetches top videos by view count (search order), collects top-level comments per video.
-  Returns JSON: channel_title, channel_url, videos_analyzed (title, url, sample_comments),
+  Uses the same relevance_language / region_code rules as tool 1 for the video search step.
+  Returns JSON: channel_title, channel_url, search_locale, videos_analyzed (title, url, sample_comments),
   collated_comment_text, note. Summarize viewer themes only from that JSON.
 
 You must respond with ONLY JSON — no markdown fences around the whole message, no extra text:
@@ -115,15 +123,31 @@ Rules:
 """
 
 
-def get_top_youtube_channels_tool(query: str, max_pages: int = 2) -> str:
+def get_top_youtube_channels_tool(
+    query: str,
+    max_pages: int = 2,
+    relevance_language: str | None = None,
+    region_code: str | None = None,
+) -> str:
     try:
         max_pages = int(max_pages)
         max_pages = max(1, min(max_pages, 10))
     except (TypeError, ValueError):
         max_pages = 2
     try:
-        rows = get_top_youtube_channels(query, max_pages=max_pages)
-        return json.dumps({"channels": rows})
+        lang_eff, reg_eff = effective_search_locale(relevance_language, region_code)
+        rows = get_top_youtube_channels(
+            query,
+            max_pages=max_pages,
+            relevance_language=relevance_language,
+            region_code=region_code,
+        )
+        return json.dumps(
+            {
+                "channels": rows,
+                "search_locale": {"relevance_language": lang_eff, "region_code": reg_eff},
+            }
+        )
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -132,6 +156,8 @@ def analyze_channel_viewer_sentiment_tool(
     channel_link: str,
     top_videos: int = 4,
     comments_per_video: int = 12,
+    relevance_language: str | None = None,
+    region_code: str | None = None,
 ) -> str:
     try:
         top_videos = int(top_videos)
@@ -148,6 +174,8 @@ def analyze_channel_viewer_sentiment_tool(
             channel_link,
             top_videos=top_videos,
             comments_per_video=comments_per_video,
+            relevance_language=relevance_language,
+            region_code=region_code,
         )
         return json.dumps(payload)
     except Exception as e:

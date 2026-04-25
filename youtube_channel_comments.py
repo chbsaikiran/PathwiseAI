@@ -11,6 +11,7 @@ import time
 from urllib.parse import parse_qs, urlparse
 
 from youtube_http import youtube_api_get
+from youtube_locale import apply_search_locale, effective_search_locale
 
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
@@ -110,7 +111,13 @@ def _resolve_channel(api_key: str, channel_input: str) -> tuple[str, str, str]:
     )
 
 
-def _top_videos_by_views(api_key: str, channel_id: str, max_videos: int) -> list[dict]:
+def _top_videos_by_views(
+    api_key: str,
+    channel_id: str,
+    max_videos: int,
+    relevance_language: str | None = None,
+    region_code: str | None = None,
+) -> list[dict]:
     """Top videos by view count using search.list only (saves one videos.list quota batch)."""
     params = {
         "part": "snippet",
@@ -120,6 +127,7 @@ def _top_videos_by_views(api_key: str, channel_id: str, max_videos: int) -> list
         "maxResults": min(max_videos, 50),
         "key": api_key,
     }
+    apply_search_locale(params, relevance_language, region_code)
     res = youtube_api_get(SEARCH_URL, params)
     _raise_if_youtube_error(res)
     items = res.get("items") or []
@@ -173,6 +181,8 @@ def analyze_channel_viewer_comments(
     channel_link: str,
     top_videos: int = 4,
     comments_per_video: int = 12,
+    relevance_language: str | None = None,
+    region_code: str | None = None,
 ) -> dict:
     """
     Resolve channel, take top `top_videos` by view count (search order), pull comments.
@@ -181,16 +191,24 @@ def analyze_channel_viewer_comments(
     api_key = _api_key()
     top_videos = max(1, min(int(top_videos), 10))
     comments_per_video = max(1, min(int(comments_per_video), 50))
+    lang_eff, reg_eff = effective_search_locale(relevance_language, region_code)
 
     channel_id, channel_title, channel_url = _resolve_channel(api_key, channel_link)
     time.sleep(0.2)
 
-    videos = _top_videos_by_views(api_key, channel_id, top_videos)
+    videos = _top_videos_by_views(
+        api_key,
+        channel_id,
+        top_videos,
+        relevance_language=relevance_language,
+        region_code=region_code,
+    )
     if not videos:
         return {
             "channel_id": channel_id,
             "channel_title": channel_title,
             "channel_url": channel_url,
+            "search_locale": {"relevance_language": lang_eff, "region_code": reg_eff},
             "videos_analyzed": [],
             "collated_comment_text": "",
             "note": "No public videos found for this channel (or search returned empty).",
@@ -239,6 +257,7 @@ def analyze_channel_viewer_comments(
         "channel_id": channel_id,
         "channel_title": channel_title,
         "channel_url": channel_url,
+        "search_locale": {"relevance_language": lang_eff, "region_code": reg_eff},
         "videos_analyzed": analyzed,
         "collated_comment_text": collated,
         "note": (

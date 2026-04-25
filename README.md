@@ -4,7 +4,7 @@ PathwiseAI is a learning project that combines a Gemini agent, YouTube Data API 
 
 ## Current capabilities
 
-- Discover top YouTube channels for a topic with scoring and channel links.
+- Discover top YouTube channels for a topic with scoring and channel links (optional **language/region** via `relevanceLanguage` + `regionCode` on YouTube search).
 - Filter discovered channels by checking whether the channel description matches user query text/terms.
 - Analyze audience tone for a channel by reading comments from top videos and summarizing common themes.
 - Show agent logs and final answers in the extension popup, with data persisted until you clear it.
@@ -12,8 +12,9 @@ PathwiseAI is a learning project that combines a Gemini agent, YouTube Data API 
 ## Project files
 
 - `10_full_agent.py`: agent loop, Gemini calls, tool dispatch, and prompt rules.
-- `get_youtube_channels.py`: `get_top_youtube_channels(query, max_pages)` for discovery and ranking.
+- `get_youtube_channels.py`: `get_top_youtube_channels(query, max_pages, ...)` for discovery and ranking.
 - `youtube_channel_comments.py`: `analyze_channel_viewer_comments(channel_link, ...)` for comment sampling.
+- `youtube_locale.py`: validates and merges `relevance_language` / `region_code` with env defaults for `search.list`.
 - `youtube_http.py`: shared YouTube HTTP client with retry/backoff for 429/500/503-like failures.
 - `extension_server.py`: FastAPI server used by the extension (`/api/run`, `/api/health`, `/`).
 - `chrome_extension/`: Manifest V3 extension popup + background service worker.
@@ -23,8 +24,8 @@ PathwiseAI is a learning project that combines a Gemini agent, YouTube Data API 
 
 The agent currently exposes exactly two tools:
 
-1. `get_top_youtube_channels`
-2. `analyze_channel_viewer_sentiment`
+1. `get_top_youtube_channels` — optional `relevance_language` (ISO 639-1, e.g. `hi`) and `region_code` (ISO 3166-1 alpha-2, e.g. `IN`), or set defaults in `.env`.
+2. `analyze_channel_viewer_sentiment` — same locale args apply to the **video search** step used to pick top videos.
 
 There is no combined third tool now. For requests like "top channels and what people say about the top one", the agent should call tool 1 first, then tool 2 on the top channel URL.
 
@@ -38,11 +39,14 @@ YOUTUBE_API_KEY=your-youtube-data-api-key
 # Optional:
 # GEMINI_MODEL=gemini-3.1-flash-lite-preview
 # GEMINI_THROTTLE_SECONDS=12
+# YOUTUBE_RELEVANCE_LANGUAGE=hi
+# YOUTUBE_REGION_CODE=IN
 ```
 
 Notes:
 - Increase `GEMINI_THROTTLE_SECONDS` (for example 15-20) if Gemini returns 503/rate-limit errors.
 - Ensure YouTube Data API v3 is enabled for the project owning `YOUTUBE_API_KEY`.
+- Locale env vars map to YouTube `search.list` parameters `relevanceLanguage` and `regionCode`. They bias results toward a language/region; they are not a hard guarantee every channel is monolingual.
 
 ## Installation
 

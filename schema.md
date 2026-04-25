@@ -1,6 +1,6 @@
 # PathwiseAI Schema
 
-Last updated: 2026-04-24
+Last updated: 2026-04-25
 
 This file is the canonical project context document for PathwiseAI. Keep it current as code evolves. The goal is to help new chat sessions quickly understand architecture, behavior, contracts, and constraints.
 
@@ -16,9 +16,10 @@ This file is the canonical project context document for PathwiseAI. Keep it curr
 - Discover top channels for a topic
   - Uses query-driven channel search and ranking
   - Applies description-based relevance filtering (channel description must match query text/terms)
+  - Optional **locale bias** on YouTube `search.list`: `relevanceLanguage` (ISO 639-1) and `regionCode` (ISO 3166-1 alpha-2), from tool args and/or env defaults
 - Analyze what viewers say about a specific channel
   - Resolves channel from URL/handle/channel ID
-  - Fetches top videos (by view-count ordering from search)
+  - Fetches top videos (by view-count ordering from search), using the same locale parameters on video search
   - Samples top-level comments and synthesizes themes
 - Extension UX behavior
   - Prompt input + run action
@@ -32,6 +33,13 @@ The agent exposes exactly **two** tools:
 
 1. `get_top_youtube_channels`
 2. `analyze_channel_viewer_sentiment`
+
+Optional tool arguments (snake_case in JSON `tool_arguments`):
+
+- `relevance_language`: ISO 639-1 two-letter language code (e.g. `hi`, `en`, `te`)
+- `region_code`: ISO 3166-1 alpha-2 region code (e.g. `IN`, `US`)
+
+If omitted, values fall back to `YOUTUBE_RELEVANCE_LANGUAGE` / `YOUTUBE_REGION_CODE` in `.env` (may be unset).
 
 Important: A previous combined tool (`discover_channels_and_top_audience`) was removed and should remain absent unless explicitly reintroduced.
 
@@ -97,15 +105,19 @@ Optional:
 
 - `GEMINI_MODEL` (default currently `gemini-3.1-flash-lite-preview`)
 - `GEMINI_THROTTLE_SECONDS` (default currently `12`)
+- `YOUTUBE_RELEVANCE_LANGUAGE` (e.g. `hi`, `en`, `te`) — default language bias for YouTube `search.list` when tools omit `relevance_language`
+- `YOUTUBE_REGION_CODE` (e.g. `IN`, `US`) — default region bias for YouTube `search.list` when tools omit `region_code`
 
 Operational note:
 - Increase `GEMINI_THROTTLE_SECONDS` when seeing Gemini 503/rate-limit bursts.
+- Locale parameters **bias** search results; they do not strictly guarantee every channel’s primary language.
 
 ## 7) YouTube Retrieval & Ranking Logic
 
 ### Channel discovery (`get_youtube_channels.py`)
 
 - Search endpoint: YouTube `search.list` with `type=channel`
+- Search may include `relevanceLanguage` + `regionCode` when configured (tool args and/or env), via `youtube_locale.py`
 - Fetch details: `channels.list` (`snippet,statistics`)
 - Relevance filter:
   - Description must match either:
@@ -122,6 +134,7 @@ Operational note:
 
 ### Viewer sentiment tool (`youtube_channel_comments.py`)
 
+- Video discovery uses `search.list` with optional `relevanceLanguage` + `regionCode` (same mechanism as channel discovery)
 - Channel resolution supports:
   - direct UC channel ID
   - `/channel/{UC...}` URL
@@ -132,6 +145,7 @@ Operational note:
 - Handles `commentsDisabled`/`forbidden` safely
 - Returns structured payload:
   - channel metadata
+  - `search_locale` echoing effective `relevance_language` / `region_code` used for video search
   - analyzed videos
   - sample comments per video
   - collated text summary input for LLM
@@ -174,6 +188,7 @@ Operational note:
 - `10_full_agent.py`
 - `get_youtube_channels.py`
 - `youtube_channel_comments.py`
+- `youtube_locale.py`
 - `youtube_http.py`
 - `extension_server.py`
 - `chrome_extension/manifest.json`

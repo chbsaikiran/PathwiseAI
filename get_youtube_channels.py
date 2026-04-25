@@ -4,6 +4,7 @@ import time
 import re
 
 from youtube_http import youtube_api_get
+from youtube_locale import apply_search_locale
 
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
@@ -34,7 +35,12 @@ def _description_matches_query(description: str, query: str) -> bool:
     return any(t in desc for t in terms)
 
 
-def get_top_youtube_channels(query, max_pages=2):
+def get_top_youtube_channels(
+    query,
+    max_pages=2,
+    relevance_language: str | None = None,
+    region_code: str | None = None,
+):
     api_key = os.getenv("YOUTUBE_API_KEY", "")
     if not api_key:
         raise RuntimeError("YOUTUBE_API_KEY not set. Add it to your .env file.")
@@ -51,6 +57,7 @@ def get_top_youtube_channels(query, max_pages=2):
             "key": api_key,
             "pageToken": next_page_token,
         }
+        apply_search_locale(params, relevance_language, region_code)
 
         res = youtube_api_get(SEARCH_URL, params)
         _raise_if_youtube_error(res)
