@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import time
@@ -73,10 +74,24 @@ def parse_top_channels_file(path: Path) -> list[dict]:
 
 def build_prefab_source(rows: list[dict]) -> str:
     """Return Python source for a Prefab app using ScatterChart as bubble plot."""
-    data_literal = json.dumps(rows, ensure_ascii=False, indent=4)
+    palette = ["#2563eb", "#16a34a", "#f59e0b", "#db2777", "#7c3aed", "#0891b2", "#dc2626"]
+    color_names = ["Blue", "Green", "Amber", "Pink", "Violet", "Cyan", "Red"]
+    chart_rows: list[dict] = []
+    for idx, r in enumerate(rows, start=1):
+        row = dict(r)
+        color = palette[(idx - 1) % len(palette)]
+        color_name = color_names[(idx - 1) % len(color_names)]
+        row["channel_hover"] = f'{r["channel"]} ({r["url"]})'
+        # Attempt per-point color; Recharts scatter can consume `fill` in point payload.
+        row["fill"] = color
+        row["bubble_color"] = color
+        row["bubble_color_name"] = color_name
+        chart_rows.append(row)
+
+    data_literal = json.dumps(chart_rows, ensure_ascii=False, indent=4)
     return f'''\
 from prefab_ui.app import PrefabApp
-from prefab_ui.components import Card, CardContent, CardHeader, CardTitle, Column, Muted
+from prefab_ui.components import Card, CardContent, CardHeader, CardTitle, Column, Muted, Row, Text
 from prefab_ui.components.charts import ChartSeries, ScatterChart
 
 # Parsed from sandbox/top_channels.txt — do not edit by hand; regenerate via channels_bubble_prefab.py
@@ -91,7 +106,8 @@ with PrefabApp(css_class="max-w-5xl mx-auto p-6") as app:
                 Muted("X-axis: subscribers · Y-axis: total views · Bubble size: number of videos")
                 ScatterChart(
                     data=data,
-                    series=[ChartSeries(data_key="views", label="Top channels")],
+                    # Single series prevents overplotting; per-point `fill` field controls dot color.
+                    series=[ChartSeries(data_key="channel_hover", label="Channel")],
                     x_axis="subscribers",
                     y_axis="views",
                     z_axis="videos",
@@ -100,7 +116,13 @@ with PrefabApp(css_class="max-w-5xl mx-auto p-6") as app:
                     show_tooltip=True,
                     show_grid=True,
                 )
-                Muted("Hover points for channel name and URL (from tooltips).")
+                Muted("Channel → bubble color mapping:")
+                with Column(gap=1):
+                    for d in data:
+                        with Row(gap=2, align="center"):
+                            Text("●", css_class=f'text-[{{d["bubble_color"]}}] text-base')
+                            Text(f'{{d["channel"]}} ({{d["bubble_color_name"]}})')
+                Muted("Hover a bubble to view channel details.")
 '''
 
 
@@ -117,11 +139,15 @@ class PrefabServer:
         self._log = open(self.log_path, "a", encoding="utf-8")
         self._log.write("\n===== channels bubble restart =====\n")
         self._log.flush()
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         self._proc = subprocess.Popen(
             ["prefab", "serve", str(self.target)],
             cwd=self.target.parent,
             stdout=self._log,
             stderr=subprocess.STDOUT,
+            creationflags=creationflags,
         )
 
     def stop(self) -> None:
@@ -130,8 +156,17 @@ class PrefabServer:
             try:
                 self._proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
-                self._proc.wait()
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(self._proc.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                    self._proc.wait(timeout=5)
+                else:
+                    self._proc.kill()
+                    self._proc.wait()
             self._proc = None
         if self._log is not None:
             self._log.close()
@@ -160,6 +195,7 @@ def main() -> None:
 
     if args.no_serve:
         print("Skipping prefab serve (--no-serve). Run: prefab serve generated_channels_bubble.py")
+        print("If Ctrl+C does not stop `prefab serve` on Windows, run via this script without --no-serve.")
         return
 
     LOG_PATH.write_text("", encoding="utf-8")

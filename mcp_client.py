@@ -94,7 +94,7 @@ Rules:
 """
 
             task = (
-                "Find top YouTube channels for the query 'machine learning tutorials' "
+                "Find top YouTube channels for the query 'transformers and LLMs' "
                 "(English, region US). Dump the full results into sandbox file top_channels.txt "
                 "(include each channel's link, subscribers, views, videos uploaded, and score). "
                 "Then read the file back to confirm, and finish with FINAL_ANSWER."
