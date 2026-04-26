@@ -1,5 +1,6 @@
 # Secrets and local config
 .env
+sandbox/
 Agent_Logs.txt
 gemini-config.json
 gemini.local.json
@@ -44,3 +45,11 @@ htmlcov/
 *~
 .DS_Store
 Thumbs.db
+
+# MCP sandbox outputs (keep folder via sandbox/.gitkeep)
+sandbox/*
+!sandbox/.gitkeep
+
+# Prefab generated app + logs
+generated_channels_bubble.py
+prefab_channels_bubble.log

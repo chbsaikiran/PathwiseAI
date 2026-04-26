@@ -1,23 +1,16 @@
 """
-Agentic loop over example_mcp_server.py using Gemini.
+Agentic loop: Gemini + MCP stdio server (`mcp_server.py`).
 
-The model picks tools from the MCP server and we execute them, feeding results
-back into the prompt until it emits FINAL_ANSWER. A 5s sleep is inserted before
-each LLM call so students can watch the loop unfold.
-
-Task chosen on purpose so the model needs ~3 tools:
-  1. write_file  — create a file in the sandbox
-  2. read_file   — verify what was written
-  3. edit_file   — replace a word inside that file
+The model calls MCP tools one at a time until it emits FINAL_ANSWER.
 
 Run:
-  # from NewCode/
-  uv run AgenticMCPUse.py
-  # or: python AgenticMCPUse.py
+  python mcp_client.py
 
 Env:
-  GEMINI_API_KEY in a .env file (same as before)
+  GEMINI_API_KEY in `.env`
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -31,10 +24,10 @@ from mcp.client.stdio import stdio_client
 
 load_dotenv()
 
-MODEL = "gemini-3.1-flash-lite-preview"   # per your instruction; swap if the name differs
-MAX_ITERATIONS = 6
+MODEL = "gemini-3.1-flash-lite-preview"
+MAX_ITERATIONS = 12
 LLM_SLEEP_SECONDS = 5
-LLM_TIMEOUT = 15
+LLM_TIMEOUT = 60
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -50,6 +43,16 @@ async def generate_with_timeout(prompt: str, timeout: int = LLM_TIMEOUT):
         timeout=timeout,
     )
 
+
+def describe_tools(tools) -> str:
+    lines = []
+    for i, t in enumerate(tools, 1):
+        props = (t.inputSchema or {}).get("properties", {})
+        params = ", ".join(f"{n}: {p.get('type', '?')}" for n, p in props.items()) or "no params"
+        lines.append(f"{i}. {t.name}({params}) — {t.description or ''}")
+    return "\n".join(lines)
+
+
 async def main():
     server_params = StdioServerParameters(
         command="python",
@@ -62,35 +65,39 @@ async def main():
             print("Connected to mcp_server")
 
             tools = (await session.list_tools()).tools
-            #tools_desc = describe_tools(tools)
+            tools_desc = describe_tools(tools)
             print(f"Loaded {len(tools)} tools\n")
 
-            system_prompt = f"""You are a YouTube channel discovery and audience sentiment analysis agent.
-You solve tasks by calling tools ONE AT A TIME and observing their results.
-You have two tools:
-1. get_top_youtube_channels: Get the top 5 youtube channels for a given query
-2. analyze_channel_viewer_sentiment: Analyze the audience sentiment of a given youtube channel
-You must respond with EXACTLY ONE line, in one of these two formats:
-  FUNCTION_CALL: {{"tool_name": "<get_top_youtube_channels|analyze_channel_viewer_sentiment>", "tool_arguments": {{...}}}}
-  FINAL_ANSWER: <short natural-language summary of what you did>
+            system_prompt = f"""You are an agent with YouTube discovery tools and sandbox file tools.
 
-Available tools:
-{tools}
+You solve tasks by calling tools ONE AT A TIME and observing their results.
+
+Available tools (names and parameters):
+{tools_desc}
+
+You must respond with EXACTLY ONE line, in one of these two formats:
+  FUNCTION_CALL: {{"tool_name": "<name>", "tool_arguments": {{...}}}}
+  FINAL_ANSWER: <summary of what you did>
 
 Rules:
-- Provide args in the exact order of the tool's parameters.
-- Do not invent tools that are not listed above.
-- After each FUNCTION_CALL you'll receive the result; use it to decide the next step.
-- Prefer the simplest 2–3 tool sequence that solves the task.
-- When the task is complete, emit FINAL_ANSWER.
-- If the task asks for top channels, FINAL_ANSWER MUST include all channels returned by the tool.
-- For each channel include: clickable URL, subscribers, views, videos uploaded, and score.
-- Use this exact per-channel template inside FINAL_ANSWER:
-  [Channel Name](URL) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
+- Use JSON for FUNCTION_CALL exactly as shown (double quotes).
+- Paths for write_file/read_file/edit_file are relative to the server sandbox folder only
+  (e.g. "top_channels.txt") — no leading slash, no "..".
+- When asked to dump top channels to a file:
+  1) Call get_top_youtube_channels with the user's query (and locale args if given).
+  2) Call write_file with a clear text body including each channel as a line or block with:
+     title, url, subscribers, views, videos, score (copy exact values from tool JSON).
+  3) Optionally call read_file to verify, then FINAL_ANSWER stating the sandbox filename.
+- When the task is only listing channels (no file), FINAL_ANSWER must still list each channel as:
+  [Title](url) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
+- Do not invent tools or URLs; only use tool outputs.
 """
 
             task = (
-                "Get the top 5 youtube channels in english for the query 'Transformers and LLMs Attention Mechanism' and in final answer include links, subscribers, views, videos uploaded, and score for each channel."
+                "Find top YouTube channels for the query 'machine learning tutorials' "
+                "(English, region US). Dump the full results into sandbox file top_channels.txt "
+                "(include each channel's link, subscribers, views, videos uploaded, and score). "
+                "Then read the file back to confirm, and finish with FINAL_ANSWER."
             )
 
             history: list[str] = []
@@ -142,9 +149,7 @@ Rules:
                     payload = f"ERROR: {e}"
 
                 print(f"← {payload}")
-                history.append(
-                    f"Iteration {iteration}: called {llm_text} → {payload}"
-                )
+                history.append(f"Iteration {iteration}: called {llm_text} → {payload}")
             else:
                 print("\nReached MAX_ITERATIONS without FINAL_ANSWER.")
 

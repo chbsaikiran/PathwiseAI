@@ -2,13 +2,15 @@
 MCP server exposing PathwiseAI YouTube tools.
 
 Run with MCP CLI (after installing mcp[cli]):
-  mcp run server.py
+  mcp run mcp_server.py
 
 Or directly:
-  python server.py
+  python mcp_server.py
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -20,6 +22,93 @@ from youtube_locale import effective_search_locale
 load_dotenv()
 
 mcp = FastMCP("pathwiseai-youtube-tools")
+
+# All file tools operate only under this directory (relative paths only).
+SANDBOX_ROOT = Path(__file__).resolve().parent / "sandbox"
+SANDBOX_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _sandbox_rel_path(rel: str) -> Path:
+    """Resolve a sandbox-relative path; reject escapes and absolute paths."""
+    raw = (rel or "").strip().replace("\\", "/").lstrip("/")
+    if not raw:
+        raise ValueError("path must be a non-empty relative path inside sandbox/")
+    if ".." in Path(raw).parts:
+        raise ValueError("path must not contain '..'")
+    root = SANDBOX_ROOT.resolve()
+    target = (root / raw).resolve()
+    if not target.is_relative_to(root):
+        raise ValueError("path escapes sandbox")
+    return target
+
+
+@mcp.tool()
+def write_file(path: str, content: str) -> dict:
+    """
+    Write text to a file inside the project sandbox/ folder.
+
+    Args:
+      path: Relative path only (e.g. "top_channels.txt"). No leading slash, no '..'.
+      content: Full file contents as UTF-8 text.
+    """
+    p = _sandbox_rel_path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return {"ok": True, "path": str(p.relative_to(SANDBOX_ROOT.resolve())), "bytes": len(content.encode("utf-8"))}
+
+
+@mcp.tool()
+def read_file(path: str) -> dict:
+    """
+    Read a UTF-8 text file from the sandbox/ folder.
+
+    Args:
+      path: Relative path inside sandbox (e.g. "top_channels.txt").
+    """
+    p = _sandbox_rel_path(path)
+    if not p.is_file():
+        return {"ok": False, "error": f"Not a file: {path}"}
+    text = p.read_text(encoding="utf-8", errors="replace")
+    return {
+        "ok": True,
+        "path": str(p.relative_to(SANDBOX_ROOT.resolve())),
+        "content": text,
+        "length": len(text),
+    }
+
+
+@mcp.tool()
+def edit_file(path: str, old: str, new: str, replace_all: bool = True) -> dict:
+    """
+    Replace occurrences of `old` with `new` in a sandbox text file.
+
+    Args:
+      path: Relative path inside sandbox.
+      old: Substring to find.
+      new: Replacement text.
+      replace_all: If true, replace all occurrences; if false, replace only the first.
+    """
+    p = _sandbox_rel_path(path)
+    if not p.is_file():
+        return {"ok": False, "error": f"Not a file: {path}"}
+    if old == "":
+        return {"ok": False, "error": "old must be a non-empty substring"}
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if old not in text:
+        return {"ok": False, "error": "old substring not found", "path": str(p.relative_to(SANDBOX_ROOT.resolve()))}
+    if replace_all:
+        updated = text.replace(old, new)
+        n = text.count(old)
+    else:
+        updated = text.replace(old, new, 1)
+        n = 1 if old in text else 0
+    p.write_text(updated, encoding="utf-8")
+    return {
+        "ok": True,
+        "path": str(p.relative_to(SANDBOX_ROOT.resolve())),
+        "replacements": n,
+        "length": len(updated),
+    }
 
 def _normalize_channels(channels: list[dict]) -> list[dict]:
     """Return stable channel schema for MCP clients."""
