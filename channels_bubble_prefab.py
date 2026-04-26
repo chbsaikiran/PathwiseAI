@@ -173,6 +173,17 @@ class PrefabServer:
             self._log = None
 
 
+def generate_app_from_input(input_path: Path) -> int:
+    """Parse input dump and rewrite generated app. Returns row count."""
+    rows = parse_top_channels_file(input_path)
+    if not rows:
+        raise SystemExit("No channel rows parsed — nothing to plot.")
+    source = build_prefab_source(rows)
+    compile(source, str(GENERATED), "exec")
+    GENERATED.write_text(source, encoding="utf-8")
+    return len(rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Generate Prefab bubble chart from top_channels.txt")
     ap.add_argument(
@@ -184,14 +195,8 @@ def main() -> None:
     ap.add_argument("--no-serve", action="store_true", help="Only write generated_channels_bubble.py")
     args = ap.parse_args()
 
-    rows = parse_top_channels_file(args.input)
-    if not rows:
-        raise SystemExit("No channel rows parsed — nothing to plot.")
-
-    source = build_prefab_source(rows)
-    compile(source, str(GENERATED), "exec")
-    GENERATED.write_text(source, encoding="utf-8")
-    print(f"Wrote {GENERATED.name} ({len(rows)} channels)")
+    row_count = generate_app_from_input(args.input)
+    print(f"Wrote {GENERATED.name} ({row_count} channels)")
 
     if args.no_serve:
         print("Skipping prefab serve (--no-serve). Run: prefab serve generated_channels_bubble.py")
@@ -205,12 +210,23 @@ def main() -> None:
     time.sleep(1.5)
     print("Open the URL printed by prefab (often http://127.0.0.1:5175 ) in your browser.")
     print("Press Ctrl+C here to stop the dev server.\n")
+    last_mtime = args.input.stat().st_mtime if args.input.exists() else None
     try:
         while True:
             time.sleep(1)
             if server._proc and server._proc.poll() is not None:
                 print("Prefab process exited.")
                 break
+            # Auto-refresh chart source when top_channels.txt changes.
+            if args.input.exists():
+                current_mtime = args.input.stat().st_mtime
+                if last_mtime is None or current_mtime > last_mtime:
+                    updated_rows = generate_app_from_input(args.input)
+                    last_mtime = current_mtime
+                    print(
+                        f"Detected update in {args.input.name}; regenerated {GENERATED.name} "
+                        f"({updated_rows} channels)."
+                    )
     except KeyboardInterrupt:
         pass
     finally:
