@@ -117,3 +117,66 @@ If you use a different host/port, update `host_permissions` in `chrome_extension
 ## License
 
 Use and modify for learning. Add a license file before redistribution.
+
+## MCP workflow (server + client + sandbox)
+
+This repo also includes an MCP setup where Gemini can call YouTube and file tools through an MCP server.
+
+- `mcp_server.py` exposes tools such as:
+  - `get_top_youtube_channels`
+  - `analyze_channel_viewer_sentiment`
+  - sandbox file tools (`write_file`, `read_file`, `edit_file`) scoped to `sandbox/`
+- `mcp_client.py` runs an agent loop that:
+  1. discovers top channels,
+  2. writes the top-5 dump to `sandbox/top_channels.txt`,
+  3. reads the file back, and
+  4. returns a final answer.
+
+Why this is useful:
+- Keeps tool execution structured and inspectable.
+- Makes the intermediate data (`sandbox/top_channels.txt`) reusable for downstream visualization (Prefab chart below).
+
+Run MCP flow:
+
+```bash
+python mcp_server.py
+```
+
+In another terminal:
+
+```bash
+python mcp_client.py
+```
+
+Notes:
+- Ensure `.env` has `GEMINI_API_KEY` and `YOUTUBE_API_KEY`.
+- `sandbox/` is intended for generated intermediate files.
+
+## Prefab bubble chart from top channels
+
+The project includes a Prefab-based chart workflow to visualize the dumped top channels.
+
+- `channels_bubble_prefab.py`:
+  - reads `sandbox/top_channels.txt`,
+  - parses the top channel rows,
+  - generates `generated_channels_bubble.py`.
+- The generated app renders a **bubble plot** with:
+  - X-axis: `subscribers`
+  - Y-axis: `views`
+  - Bubble size: `videos` (`z_axis` in Prefab `ScatterChart`)
+
+Quick usage:
+
+```bash
+python channels_bubble_prefab.py --no-serve
+prefab serve generated_channels_bubble.py
+```
+
+Or run one command to generate and try starting Prefab directly:
+
+```bash
+python channels_bubble_prefab.py
+```
+
+Windows console note:
+- If `prefab serve` fails with a Unicode/encoding error, switch terminal to UTF-8 (for example `chcp 65001`) and retry.
