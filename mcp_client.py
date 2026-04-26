@@ -115,7 +115,7 @@ async def main():
             tools_desc = describe_tools(tools)
             print(f"Loaded {len(tools)} tools\n")
 
-            system_prompt = f"""You are an agent with YouTube discovery tools and sandbox file tools.
+            system_prompt = f"""You are an agent with YouTube discovery tools, sandbox file tools, and a Prefab generation tool.
 
 You solve tasks by calling tools ONE AT A TIME and observing their results.
 
@@ -140,17 +140,22 @@ Rules:
      Videos: <int>
      Score: <float>
      (blank line between channels)
-  3) Optionally call read_file to verify, then FINAL_ANSWER stating the sandbox filename.
+  3) Call read_file to verify the written content.
+  4) Call build_prefab_source with input_path="top_channels.txt" and
+     output_filename="generated_channels_bubble.py".
+  5) FINAL_ANSWER must mention both files:
+     sandbox/top_channels.txt and generated_channels_bubble.py
 - When the task is only listing channels (no file), FINAL_ANSWER must still list each channel as:
   [Title](url) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
 - Do not invent tools or URLs; only use tool outputs.
 """
 
             task = (
-                "Find top YouTube channels for the query 'AI and Reinforcement Learning' "
+                "Find top YouTube channels for the query 'transformers and LLMs' "
                 "(English, region IN). Dump the full results into sandbox file top_channels.txt "
                 "(include each channel's link, subscribers, views, videos uploaded, and score). "
-                "Then read the file back to confirm, and finish with FINAL_ANSWER."
+                "Then read the file back to confirm, call build_prefab_source to generate "
+                "generated_channels_bubble.py, and finish with FINAL_ANSWER."
             )
 
             history: list[str] = []

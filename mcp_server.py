@@ -15,6 +15,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
+from channels_bubble_prefab import (
+    build_prefab_source as _build_prefab_source_template,
+    parse_top_channels_file as _parse_top_channels_file,
+)
 from get_youtube_channels import get_top_youtube_channels as _get_top_youtube_channels
 from youtube_channel_comments import analyze_channel_viewer_comments as _analyze_channel_viewer_comments
 from youtube_locale import effective_search_locale
@@ -26,6 +30,7 @@ mcp = FastMCP("pathwiseai-youtube-tools")
 # All file tools operate only under this directory (relative paths only).
 SANDBOX_ROOT = Path(__file__).resolve().parent / "sandbox"
 SANDBOX_ROOT.mkdir(parents=True, exist_ok=True)
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def _sandbox_rel_path(rel: str) -> Path:
@@ -108,6 +113,37 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = True) -> dict:
         "path": str(p.relative_to(SANDBOX_ROOT.resolve())),
         "replacements": n,
         "length": len(updated),
+    }
+
+
+@mcp.tool(name="build_prefab_source")
+def build_prefab_source_tool(
+    input_path: str = "top_channels.txt",
+    output_filename: str = "generated_channels_bubble.py",
+) -> dict:
+    """
+    Generate a Prefab plot app from sandbox top-channels text using build_prefab_source().
+
+    Args:
+      input_path: Sandbox-relative input file (default "top_channels.txt").
+      output_filename: Output Python file in project root (default "generated_channels_bubble.py").
+    """
+    input_file = _sandbox_rel_path(input_path)
+    if not input_file.is_file():
+        return {"ok": False, "error": f"Input file not found: {input_path}"}
+
+    rows = _parse_top_channels_file(input_file)
+    source = _build_prefab_source_template(rows)
+    compile(source, str(PROJECT_ROOT / output_filename), "exec")
+
+    out = PROJECT_ROOT / output_filename
+    out.write_text(source, encoding="utf-8")
+    return {
+        "ok": True,
+        "input_path": str(input_file.relative_to(SANDBOX_ROOT.resolve())),
+        "output_path": str(out.relative_to(PROJECT_ROOT)),
+        "channels": len(rows),
+        "bytes": len(source.encode("utf-8")),
     }
 
 def _normalize_channels(channels: list[dict]) -> list[dict]:

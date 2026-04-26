@@ -27,10 +27,25 @@ import subprocess
 import time
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional dependency in some envs
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
+
+try:
+    from google import genai
+except Exception:  # pragma: no cover - optional dependency in some envs
+    genai = None
+
 HERE = Path(__file__).resolve().parent
 DEFAULT_INPUT = HERE / "sandbox" / "top_channels.txt"
 GENERATED = HERE / "generated_channels_bubble.py"
 LOG_PATH = HERE / "prefab_channels_bubble.log"
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY")) if genai is not None else None
 
 # Format A:
 #   Title: <url>, Subscribers: N, Views: N, Videos: N, Score: S
@@ -156,8 +171,8 @@ def parse_top_channels_file(path: Path) -> list[dict]:
     return rows
 
 
-def build_prefab_source(rows: list[dict]) -> str:
-    """Return Python source for a Prefab app using ScatterChart as bubble plot."""
+def _build_prefab_source_fallback(rows: list[dict]) -> str:
+    """Deterministic fallback when LLM generation is unavailable."""
     palette = ["#2563eb", "#16a34a", "#f59e0b", "#db2777", "#7c3aed", "#0891b2", "#dc2626"]
     color_names = ["Blue", "Green", "Amber", "Pink", "Violet", "Cyan", "Red"]
     chart_rows: list[dict] = []
@@ -208,6 +223,97 @@ with PrefabApp(css_class="max-w-5xl mx-auto p-6") as app:
                             Text(f'{{d["channel"]}} ({{d["bubble_color_name"]}})')
                 Muted("Hover a bubble to view channel details.")
 '''
+
+
+def _extract_python_from_response(text: str) -> str:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:python)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+
+
+def _looks_like_supported_prefab_source(source: str) -> bool:
+    """Reject common invalid patterns the model may hallucinate."""
+    if not source.strip():
+        return False
+    forbidden = [
+        "@app.page(",
+        "def index(",
+        "app = PrefabApp(",
+        "style={",
+    ]
+    required = [
+        "from prefab_ui.app import PrefabApp",
+        "with PrefabApp(",
+        "ScatterChart(",
+        'x_axis="subscribers"',
+        'y_axis="views"',
+        'z_axis="videos"',
+    ]
+    if any(tok in source for tok in forbidden):
+        return False
+    if not all(tok in source for tok in required):
+        return False
+    return True
+
+
+def build_prefab_source(rows: list[dict]) -> str:
+    """
+    Generate Prefab app source with LLM (prompt_to_app.py style), with fallback.
+    """
+    if not os.getenv("GEMINI_API_KEY"):
+        return _build_prefab_source_fallback(rows)
+
+    rows_json = json.dumps(rows, ensure_ascii=False, indent=2)
+    prompt = f"""Generate a complete Python Prefab app file.
+
+Requirements:
+- Use ONLY these imports:
+  from prefab_ui.app import PrefabApp
+  from prefab_ui.components import Card, CardContent, CardHeader, CardTitle, Column, Muted, Row, Text
+  from prefab_ui.components.charts import ChartSeries, ScatterChart
+- Include a top-level variable named `data` set exactly to this JSON list:
+{rows_json}
+- Build one bubble chart with:
+  - x_axis = subscribers
+  - y_axis = views
+  - z_axis = videos
+- Include tooltip context by using series=[ChartSeries(data_key="channel_hover", label="Channel")]
+- Before chart render, enrich each row in `data` by adding:
+  - channel_hover = "<channel> (<url>)"
+  - fill / bubble_color / bubble_color_name fields for channel color mapping
+- Bubble colors in the chart MUST use the exact per-row color field (same hex value used in legend),
+  so each channel bubble color matches its legend marker color one-to-one.
+- Prefer setting per-point color via `fill` in each data row and ensure chart rendering uses that field.
+- If needed, configure chart series so it does not override point-level colors with a single default color.
+- Under chart, show a channel-color mapping list with a VISIBLY COLORED marker next to each channel name.
+- For each legend row, render a dot like `Text("●", css_class=f'text-[{{d["bubble_color"]}}] text-base')`
+  before the channel text so the legend color clearly matches bubble color.
+- Do not show plain text-only channel names; each legend entry must include the colored marker.
+- Use PrefabApp + Card layout, with title "Top channels — bubble chart".
+
+Output rules:
+- Return ONLY valid Python code.
+- No markdown fences.
+- No prose.
+- Do NOT use `@app.page`, route decorators, or FastAPI-style handlers.
+- Use only context-manager style Prefab syntax:
+  with PrefabApp(...) as app:
+      ...
+"""
+    try:
+        response = client.models.generate_content(model=MODEL, contents=prompt)
+        source = _extract_python_from_response(response.text or "")
+        if not source:
+            raise ValueError("empty model response")
+        if not _looks_like_supported_prefab_source(source):
+            raise ValueError("unsupported prefab syntax from model")
+        compile(source, "<generated_llm_app>", "exec")
+        print("used Gemini model: " + MODEL)
+        return source
+    except Exception:
+        return _build_prefab_source_fallback(rows)
 
 
 class PrefabServer:
@@ -263,6 +369,9 @@ def generate_app_from_input(input_path: Path) -> int:
     if not rows:
         raise SystemExit("No channel rows parsed — nothing to plot.")
     source = build_prefab_source(rows)
+    # Final safety net: never write unsupported Prefab syntax.
+    if not _looks_like_supported_prefab_source(source):
+        source = _build_prefab_source_fallback(rows)
     compile(source, str(GENERATED), "exec")
     GENERATED.write_text(source, encoding="utf-8")
     return len(rows)
