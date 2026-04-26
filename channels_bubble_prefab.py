@@ -32,12 +32,36 @@ DEFAULT_INPUT = HERE / "sandbox" / "top_channels.txt"
 GENERATED = HERE / "generated_channels_bubble.py"
 LOG_PATH = HERE / "prefab_channels_bubble.log"
 
-# Title: <url>, Subscribers: N, Views: N, Videos: N, Score: S
-_LINE_RE = re.compile(
+# Format A:
+#   Title: <url>, Subscribers: N, Views: N, Videos: N, Score: S
+_LINE_RE_COMMA = re.compile(
     r"^(?P<title>.+?):\s+(?P<url>https?://\S+)\s*,\s*"
     r"Subscribers:\s*(?P<subscribers>[\d,]+)\s*,\s*"
     r"Views:\s*(?P<views>[\d,]+)\s*,\s*"
     r"Videos:\s*(?P<videos>[\d,]+)\s*,\s*"
+    r"Score:\s*(?P<score>[\d.]+)\s*$",
+    re.IGNORECASE,
+)
+
+# Format B:
+#   1. Channel Name | URL: <url> | Subscribers: N | Views: N | Videos: N | Score: S
+_LINE_RE_PIPE = re.compile(
+    r"^(?:\d+\.\s*)?(?P<title>[^|]+?)\s*\|\s*"
+    r"URL:\s*(?P<url>https?://\S+)\s*\|\s*"
+    r"Subscribers:\s*(?P<subscribers>[\d,]+)\s*\|\s*"
+    r"Views:\s*(?P<views>[\d,]+)\s*\|\s*"
+    r"Videos:\s*(?P<videos>[\d,]+)\s*\|\s*"
+    r"Score:\s*(?P<score>[\d.]+)\s*$",
+    re.IGNORECASE,
+)
+
+# Format C:
+#   1. Channel Name: <url> | Subscribers: N | Views: N | Videos: N | Score: S
+_LINE_RE_PIPE_COLON_URL = re.compile(
+    r"^(?:\d+\.\s*)?(?P<title>.+?)\s*:\s*(?P<url>https?://\S+)\s*\|\s*"
+    r"Subscribers:\s*(?P<subscribers>[\d,]+)\s*\|\s*"
+    r"Views:\s*(?P<views>[\d,]+)\s*\|\s*"
+    r"Videos:\s*(?P<videos>[\d,]+)\s*\|\s*"
     r"Score:\s*(?P<score>[\d.]+)\s*$",
     re.IGNORECASE,
 )
@@ -51,24 +75,84 @@ def parse_top_channels_file(path: Path) -> list[dict]:
     if not path.is_file():
         raise FileNotFoundError(f"Missing input file: {path}")
     rows: list[dict] = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    # First pass: one-line formats (comma / pipe).
+    for raw in lines:
         line = raw.strip()
         if not line:
             continue
-        m = _LINE_RE.match(line)
-        if not m:
+        m = _LINE_RE_COMMA.match(line) or _LINE_RE_PIPE.match(line) or _LINE_RE_PIPE_COLON_URL.match(line)
+        if m:
+            title = m.group("title").strip()
+            rows.append(
+                {
+                    "channel": title,
+                    "url": m.group("url").strip(),
+                    "subscribers": _int_field(m.group("subscribers")),
+                    "views": _int_field(m.group("views")),
+                    "videos": _int_field(m.group("videos")),
+                    "score": float(m.group("score")),
+                }
+            )
+    if rows:
+        return rows
+
+    # Second pass: multi-line block format.
+    # Example:
+    # 1. Channel Name
+    # URL: ...
+    # Subscribers: ...
+    # Views: ...
+    # Videos: ...
+    # Score: ...
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+
+        title_match = re.match(r"^(?:\d+\.\s*)?(?P<title>.+)$", line)
+        if not title_match:
             raise ValueError(f"Could not parse line:\n{line!r}")
-        title = m.group("title").strip()
+        title = title_match.group("title").strip()
+
+        block: dict[str, str] = {}
+        i += 1
+        while i < n:
+            nxt = lines[i].strip()
+            if not nxt:
+                i += 1
+                break
+            if re.match(r"^(?:\d+\.\s*)?.+$", nxt) and ":" not in nxt:
+                # Next title line without blank separator.
+                break
+            if ":" not in nxt:
+                raise ValueError(f"Could not parse line:\n{nxt!r}")
+            key, val = nxt.split(":", 1)
+            block[key.strip().lower()] = val.strip()
+            i += 1
+
+        required = ("url", "subscribers", "views", "videos", "score")
+        missing = [k for k in required if k not in block]
+        if missing:
+            raise ValueError(f"Missing fields for channel {title!r}: {', '.join(missing)}")
+
         rows.append(
             {
                 "channel": title,
-                "url": m.group("url").strip(),
-                "subscribers": _int_field(m.group("subscribers")),
-                "views": _int_field(m.group("views")),
-                "videos": _int_field(m.group("videos")),
-                "score": float(m.group("score")),
+                "url": block["url"],
+                "subscribers": _int_field(block["subscribers"]),
+                "views": _int_field(block["views"]),
+                "videos": _int_field(block["videos"]),
+                "score": float(block["score"]),
             }
         )
+
+    if not rows:
+        raise ValueError(f"No channel rows found in {path}")
     return rows
 
 

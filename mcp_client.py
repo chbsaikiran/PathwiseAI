@@ -53,6 +53,53 @@ def describe_tools(tools) -> str:
     return "\n".join(lines)
 
 
+def extract_channels_from_payload(payload: str) -> list[dict] | None:
+    """Best-effort parse of get_top_youtube_channels tool text payload."""
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    channels = data.get("channels")
+    if not isinstance(channels, list):
+        return None
+    normalized: list[dict] = []
+    for ch in channels:
+        if not isinstance(ch, dict):
+            continue
+        normalized.append(
+            {
+                "title": str(ch.get("title", "")).strip(),
+                "url": str(ch.get("url", "")).strip(),
+                "subscribers": int(ch.get("subscribers", 0) or 0),
+                "views": int(ch.get("views", 0) or 0),
+                "videos": int(ch.get("videos", 0) or 0),
+                "score": float(ch.get("score", 0.0) or 0.0),
+            }
+        )
+    return normalized or None
+
+
+def format_channels_dump(channels: list[dict]) -> str:
+    """Canonical dump format consumed by channels_bubble_prefab.py parser."""
+    blocks: list[str] = []
+    for i, ch in enumerate(channels, start=1):
+        blocks.append(
+            "\n".join(
+                [
+                    f"{i}. {ch['title']}",
+                    f"URL: {ch['url']}",
+                    f"Subscribers: {ch['subscribers']}",
+                    f"Views: {ch['views']}",
+                    f"Videos: {ch['videos']}",
+                    f"Score: {ch['score']:.4f}",
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
+
+
 async def main():
     server_params = StdioServerParameters(
         command="python",
@@ -85,8 +132,14 @@ Rules:
   (e.g. "top_channels.txt") — no leading slash, no "..".
 - When asked to dump top channels to a file:
   1) Call get_top_youtube_channels with the user's query (and locale args if given).
-  2) Call write_file with a clear text body including each channel as a line or block with:
-     title, url, subscribers, views, videos, score (copy exact values from tool JSON).
+  2) Call write_file using EXACT canonical format below (do not invent other formats):
+     1. <title>
+     URL: <url>
+     Subscribers: <int>
+     Views: <int>
+     Videos: <int>
+     Score: <float>
+     (blank line between channels)
   3) Optionally call read_file to verify, then FINAL_ANSWER stating the sandbox filename.
 - When the task is only listing channels (no file), FINAL_ANSWER must still list each channel as:
   [Title](url) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
@@ -94,8 +147,8 @@ Rules:
 """
 
             task = (
-                "Find top YouTube channels for the query 'transformers and LLMs' "
-                "(English, region US). Dump the full results into sandbox file top_channels.txt "
+                "Find top YouTube channels for the query 'AI and Reinforcement Learning' "
+                "(English, region IN). Dump the full results into sandbox file top_channels.txt "
                 "(include each channel's link, subscribers, views, videos uploaded, and score). "
                 "Then read the file back to confirm, and finish with FINAL_ANSWER."
             )
@@ -145,6 +198,22 @@ Rules:
                         if result.content and hasattr(result.content[0], "text")
                         else str(result)
                     )
+                    # Stabilize LLM outputs: after channel discovery, write a canonical dump format
+                    # so downstream plotting never depends on model formatting variability.
+                    if tool_name == "get_top_youtube_channels":
+                        channels = extract_channels_from_payload(payload)
+                        if channels:
+                            canonical_text = format_channels_dump(channels)
+                            write_res = await session.call_tool(
+                                "write_file",
+                                {"path": "top_channels.txt", "content": canonical_text},
+                            )
+                            write_payload = (
+                                write_res.content[0].text
+                                if write_res.content and hasattr(write_res.content[0], "text")
+                                else str(write_res)
+                            )
+                            payload = f"{payload}\nAUTO_WRITE_FILE: {write_payload}"
                 except Exception as e:
                     payload = f"ERROR: {e}"
 
