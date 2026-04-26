@@ -19,6 +19,9 @@ PathwiseAI is a learning project that combines a Gemini agent, YouTube Data API 
 - `extension_server.py`: FastAPI server used by the extension (`/api/run`, `/api/health`, `/`).
 - `chrome_extension/`: Manifest V3 extension popup + background service worker.
 - `requirements.txt`: Python dependencies.
+- `mcp_server.py`: MCP (FastMCP) stdio server — YouTube tools, sandbox file tools, and `build_prefab_source` for Prefab app generation.
+- `mcp_client.py`: asyncio agent loop — Gemini chooses one `FUNCTION_CALL:` per turn until `FINAL_ANSWER:`.
+- `channels_bubble_prefab.py`: parses `sandbox/top_channels.txt`, calls Gemini to draft a Prefab app (or uses a local fallback), writes `generated_channels_bubble.py`, optional `prefab serve` + file watch.
 
 ## Agent tools (latest)
 
@@ -120,63 +123,68 @@ Use and modify for learning. Add a license file before redistribution.
 
 ## MCP workflow (server + client + sandbox)
 
-This repo also includes an MCP setup where Gemini can call YouTube and file tools through an MCP server.
+The repo includes an **MCP stdio** stack: `mcp_server.py` registers tools with FastMCP; `mcp_client.py` connects over stdio, lists tools, and runs a **Gemini** loop where each model reply is exactly one line: either `FUNCTION_CALL: {"tool_name": "...", "tool_arguments": {...}}` or `FINAL_ANSWER: ...`.
 
-- `mcp_server.py` exposes tools such as:
-  - `get_top_youtube_channels`
-  - `analyze_channel_viewer_sentiment`
-  - sandbox file tools (`write_file`, `read_file`, `edit_file`) scoped to `sandbox/`
-- `mcp_client.py` runs an agent loop that:
-  1. discovers top channels,
-  2. writes the top-5 dump to `sandbox/top_channels.txt`,
-  3. reads the file back, and
-  4. returns a final answer.
+### `mcp_server.py` (tools)
 
-Why this is useful:
-- Keeps tool execution structured and inspectable.
-- Makes the intermediate data (`sandbox/top_channels.txt`) reusable for downstream visualization (Prefab chart below).
+All file paths for `write_file` / `read_file` / `edit_file` are **sandbox-relative** (under `sandbox/`), with `..` and absolute paths rejected.
 
-Run MCP flow:
+| Tool | Role |
+|------|------|
+| `get_top_youtube_channels` | YouTube discovery; returns JSON with `channels` (title, url, subscribers, views, videos, score) and `search_locale`. |
+| `analyze_channel_viewer_sentiment` | Comment sampling + structured payload for a channel URL or id. |
+| `write_file` / `read_file` / `edit_file` | Sandbox text I/O and replace. |
+| `build_prefab_source` | Reads a sandbox dump (default `top_channels.txt`), parses rows via `channels_bubble_prefab.parse_top_channels_file`, runs `build_prefab_source()` from that module, compiles the result, and writes a **project-root** Python file (default `generated_channels_bubble.py`). |
+
+Run the server (stdio):
 
 ```bash
 python mcp_server.py
 ```
 
-In another terminal:
+Or with the MCP CLI: `mcp run mcp_server.py` (see `requirements.txt` for `mcp[cli]`).
+
+### `mcp_client.py` (agent)
+
+- Starts `python mcp_server.py` as a subprocess and opens a `ClientSession`.
+- Injects a **system prompt** that describes the current tool list and rules (canonical channel dump format, `read_file` verification, then `build_prefab_source` with `input_path` / `output_filename`, and `FINAL_ANSWER` mentioning `sandbox/top_channels.txt` and the generated `.py`).
+- **Stability hook:** after `get_top_youtube_channels`, the client parses the tool JSON, formats a **canonical** multi-block text dump (`format_channels_dump`), and calls `write_file` for `top_channels.txt` so downstream steps do not depend on the model’s free-form file layout.
+- **Configurable task:** edit the `task = (...)` string at the bottom of `mcp_client.py` (query, locale, whether you want a chart, etc.).
 
 ```bash
 python mcp_client.py
 ```
 
-Notes:
-- Ensure `.env` has `GEMINI_API_KEY` and `YOUTUBE_API_KEY`.
-- `sandbox/` is intended for generated intermediate files.
+Env: `GEMINI_API_KEY` (and `YOUTUBE_API_KEY` on the server for YouTube tools). Optional tuning: `MODEL`, `MAX_ITERATIONS`, `LLM_SLEEP_SECONDS`, `LLM_TIMEOUT` in `mcp_client.py`.
 
-## Prefab bubble chart from top channels
+## Prefab charts from `top_channels.txt` (`channels_bubble_prefab.py`)
 
-The project includes a Prefab-based chart workflow to visualize the dumped top channels.
+This script is both a **CLI** and the **library** used by the MCP `build_prefab_source` tool.
 
-- `channels_bubble_prefab.py`:
-  - reads `sandbox/top_channels.txt`,
-  - parses the top channel rows,
-  - generates `generated_channels_bubble.py`.
-- The generated app renders a **bubble plot** with:
-  - X-axis: `subscribers`
-  - Y-axis: `views`
-  - Bubble size: `videos` (`z_axis` in Prefab `ScatterChart`)
+### Parsing
 
-Quick usage:
+`parse_top_channels_file` accepts several dump shapes: single-line comma or pipe formats, and a **multi-line block** per channel (`1. Title`, then `URL:`, `Subscribers:`, `Views:`, `Videos:`, `Score:`). That matches the canonical text produced by `mcp_client.py` after `get_top_youtube_channels`.
+
+### Generation
+
+- **`build_prefab_source(rows)`** — If `GEMINI_API_KEY` is set and `google.genai` is available, asks Gemini for a full Prefab app source string; otherwise uses **`_build_prefab_source_fallback`**. Output is syntax-checked with `compile()`; invalid LLM patterns (e.g. `@app.page`) are rejected and the fallback is used.
+- **`generate_app_from_input`** — Parses the file, builds source, applies a final validator pass, writes **`generated_channels_bubble.py`** at the repo root.
+
+### CLI behavior
 
 ```bash
-python channels_bubble_prefab.py --no-serve
+python channels_bubble_prefab.py --no-serve   # write generated_channels_bubble.py only
+python channels_bubble_prefab.py               # generate + run `prefab serve` (logs in prefab_channels_bubble.log)
+```
+
+With serve mode, the script watches **`sandbox/top_channels.txt`** mtime and regenerates when it changes. On Windows, stopping the child `prefab` process uses a process-group + `taskkill` fallback so **Ctrl+C** is more reliable than running `prefab serve` alone.
+
+### Viewing the chart
+
+```bash
 prefab serve generated_channels_bubble.py
 ```
 
-Or run one command to generate and try starting Prefab directly:
+Windows: if `prefab` crashes on Rich Unicode output, use UTF-8 in the console (`chcp 65001` or `PYTHONUTF8=1`) or rely on `python channels_bubble_prefab.py`, which logs to a file.
 
-```bash
-python channels_bubble_prefab.py
-```
-
-Windows console note:
-- If `prefab serve` fails with a Unicode/encoding error, switch terminal to UTF-8 (for example `chcp 65001`) and retry.
+The generated bubble chart is intended to plot **subscribers** (x), **views** (y), and **videos** as bubble size (`ScatterChart` `z_axis`), with a short legend under the card when the template includes it.
