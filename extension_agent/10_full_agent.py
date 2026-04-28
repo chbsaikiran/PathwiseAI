@@ -16,6 +16,10 @@ Chrome extension: load chrome_extension/ in Chrome; start the local API with:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from collections.abc import Callable
 from google import genai
 import json

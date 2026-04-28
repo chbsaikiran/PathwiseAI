@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 from concurrent.futures import TimeoutError
+from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
@@ -103,7 +104,7 @@ def format_channels_dump(channels: list[dict]) -> str:
 async def main():
     server_params = StdioServerParameters(
         command="python",
-        args=["mcp_server.py"],
+        args=[str(Path(__file__).resolve().parent / "mcp_server.py")],
     )
 
     async with stdio_client(server_params) as (read, write):
