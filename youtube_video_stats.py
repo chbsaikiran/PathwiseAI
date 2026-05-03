@@ -87,7 +87,8 @@ def get_top_videos_with_stats(channel_link: str, top_n: int = 5) -> list[dict]:
             "like_count": int(s.get("likeCount") or 0),
         }
 
-    # Merge in original search-rank order.
+    # Merge, then re-sort by actual view_count (search rank is YouTube's estimate;
+    # the real numbers from videos.list are authoritative).
     out: list[dict] = []
     for vid in video_ids:
         stats = stats_by_id.get(vid, {"view_count": 0, "like_count": 0})
@@ -102,4 +103,5 @@ def get_top_videos_with_stats(channel_link: str, top_n: int = 5) -> list[dict]:
                 "channel_url": channel_url,
             }
         )
+    out.sort(key=lambda x: x["view_count"], reverse=True)
     return out

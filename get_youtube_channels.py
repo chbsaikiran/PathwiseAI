@@ -53,6 +53,7 @@ def get_top_youtube_channels(
             "part": "snippet",
             "q": query,
             "type": "channel",
+            "order": "viewCount",   # best API proxy for subscriber count
             "maxResults": 25,
             "key": api_key,
             "pageToken": next_page_token,
@@ -125,5 +126,5 @@ def get_top_youtube_channels(
                 }
             )
 
-    channels.sort(key=lambda x: x["score"], reverse=True)
+    channels.sort(key=lambda x: x["subscribers"], reverse=True)
     return channels[:5]
