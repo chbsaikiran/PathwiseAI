@@ -1,5 +1,4 @@
 import os
-import math
 import time
 import re
 
@@ -115,12 +114,6 @@ def get_top_youtube_channels(
             if subs < 1000 or videos < 10:
                 continue
 
-            score = (
-                math.log(subs + 1) * 0.6
-                + math.log(views + 1) * 0.3
-                + math.log(videos + 1) * 0.1
-            )
-
             cid = item["id"]
             custom = (snippet.get("customUrl") or "").strip().lstrip("@")
             if custom:
@@ -136,9 +129,27 @@ def get_top_youtube_channels(
                     "subscribers": subs,
                     "views": views,
                     "videos": videos,
-                    "score": round(score, 4),
                 }
             )
 
-    channels.sort(key=lambda x: x["subscribers"], reverse=True)
+    if not channels:
+        return []
+
+    # Min-max normalize each metric independently to [0, 1] so that subscribers
+    # (thousands), views (millions), and video count (hundreds) all contribute
+    # equally to the final score regardless of their raw magnitude.
+    for key in ("subscribers", "views", "videos"):
+        vals = [ch[key] for ch in channels]
+        lo, hi = min(vals), max(vals)
+        span = hi - lo or 1  # avoid divide-by-zero when all values are identical
+        for ch in channels:
+            ch[f"_{key}_norm"] = (ch[key] - lo) / span
+
+    for ch in channels:
+        ch["score"] = round(
+            (ch.pop("_subscribers_norm") + ch.pop("_views_norm") + ch.pop("_videos_norm")) / 3,
+            4,
+        )
+
+    channels.sort(key=lambda x: x["score"], reverse=True)
     return channels[:5]
