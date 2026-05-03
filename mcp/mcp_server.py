@@ -21,9 +21,11 @@ from channels_bubble_prefab import (
     build_prefab_source as _build_prefab_source_template,
     parse_top_channels_file as _parse_top_channels_file,
 )
+from video_views_prefab import build_video_chart_source as _build_video_chart_source
 from get_youtube_channels import get_top_youtube_channels as _get_top_youtube_channels
 from youtube_channel_comments import analyze_channel_viewer_comments as _analyze_channel_viewer_comments
 from youtube_locale import effective_search_locale
+from youtube_video_stats import get_top_videos_with_stats as _get_top_videos_with_stats
 
 load_dotenv()
 
@@ -243,6 +245,47 @@ def analyze_channel_viewer_sentiment(
         region_code=region_code,
     )
     return payload
+
+
+@mcp.tool()
+def plot_channel_top_videos(channel_link: str, top_n: int = 5) -> dict:
+    """
+    Fetch the top N videos by view count for a YouTube channel and generate a
+    Prefab scatter chart plotting view count (X-axis) vs like count (Y-axis).
+
+    Args:
+      channel_link: YouTube channel URL (/@handle or /channel/UC...) or UC... channel id.
+      top_n: Number of top videos to include (1–10, default 5).
+
+    Returns:
+      {
+        "ok": bool,
+        "channel_link": str,
+        "videos": [{"title", "url", "view_count", "like_count", ...}],
+        "output_path": str,   # relative path of the generated Prefab file
+        "bytes": int
+      }
+    """
+    top_n = max(1, min(int(top_n), 10))
+    try:
+        videos = _get_top_videos_with_stats(channel_link, top_n=top_n)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    if not videos:
+        return {"ok": False, "error": "No videos found for this channel."}
+
+    source = _build_video_chart_source(videos)
+    out = PROJECT_ROOT / "generated_video_views.py"
+    out.write_text(source, encoding="utf-8")
+
+    return {
+        "ok": True,
+        "channel_link": channel_link,
+        "videos": videos,
+        "output_path": str(out.relative_to(PROJECT_ROOT)),
+        "bytes": len(source.encode("utf-8")),
+    }
 
 
 if __name__ == "__main__":

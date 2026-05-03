@@ -30,6 +30,27 @@ MAX_ITERATIONS = 12
 LLM_SLEEP_SECONDS = 5
 LLM_TIMEOUT = 60
 
+# ── Task selection ────────────────────────────────────────────────────────────
+# Switch ACTIVE_TASK to choose which prompt the agent runs.
+
+TASK_TOP_CHANNELS = (
+    "Find top YouTube channels for the query 'CBSE Class 10 Maths' "
+    "(English, region IN). Dump the full results into sandbox file top_channels.txt "
+    "(include each channel's link, subscribers, views, videos uploaded, and score). "
+    "Then read the file back to confirm, call build_prefab_source to generate "
+    "generated_channels_bubble.py, and finish with FINAL_ANSWER."
+)
+
+TASK_VIDEO_VIEWS = (
+    "Plot the top 5 videos by view count for the YouTube channel "
+    "'https://www.youtube.com/@3blue1brown'. "
+    "Call plot_channel_top_videos with that channel link, then give a FINAL_ANSWER "
+    "that mentions generated_video_views.py and lists every video with its view and like counts."
+)
+
+ACTIVE_TASK = TASK_TOP_CHANNELS  # ← change to TASK_VIDEO_VIEWS for the video chart
+# ─────────────────────────────────────────────────────────────────────────────
+
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
@@ -148,16 +169,14 @@ Rules:
      sandbox/top_channels.txt and generated_channels_bubble.py
 - When the task is only listing channels (no file), FINAL_ANSWER must still list each channel as:
   [Title](url) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
+- When asked to plot top videos for a YouTube channel:
+  1) Call plot_channel_top_videos with the channel_link (and optional top_n).
+  2) FINAL_ANSWER must mention generated_video_views.py and list every video with
+     its title, view count, and like count.
 - Do not invent tools or URLs; only use tool outputs.
 """
 
-            task = (
-                "Find top YouTube channels for the query 'GATE Data Science and AI Preparation' "
-                "(English, region IN). Dump the full results into sandbox file top_channels.txt "
-                "(include each channel's link, subscribers, views, videos uploaded, and score). "
-                "Then read the file back to confirm, call build_prefab_source to generate "
-                "generated_channels_bubble.py, and finish with FINAL_ANSWER."
-            )
+            task = ACTIVE_TASK
 
             history: list[str] = []
             for iteration in range(1, MAX_ITERATIONS + 1):
