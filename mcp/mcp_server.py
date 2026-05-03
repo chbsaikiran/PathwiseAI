@@ -21,7 +21,10 @@ from channels_bubble_prefab import (
     build_prefab_source as _build_prefab_source_template,
     parse_top_channels_file as _parse_top_channels_file,
 )
-from video_views_prefab import build_video_chart_source as _build_video_chart_source
+from video_views_prefab import (
+    build_video_chart_source as _build_video_chart_source,
+    parse_top_videos_file as _parse_top_videos_file,
+)
 from get_youtube_channels import get_top_youtube_channels as _get_top_youtube_channels
 from youtube_channel_comments import analyze_channel_viewer_comments as _analyze_channel_viewer_comments
 from youtube_locale import effective_search_locale
@@ -248,22 +251,19 @@ def analyze_channel_viewer_sentiment(
 
 
 @mcp.tool()
-def plot_channel_top_videos(channel_link: str, top_n: int = 5) -> dict:
+def get_top_video_stats(channel_link: str, top_n: int = 5) -> dict:
     """
-    Fetch the top N videos by view count for a YouTube channel and generate a
-    Prefab scatter chart plotting view count (X-axis) vs like count (Y-axis).
+    Fetch the top N videos by view count for a YouTube channel with actual view and like counts.
 
     Args:
       channel_link: YouTube channel URL (/@handle or /channel/UC...) or UC... channel id.
-      top_n: Number of top videos to include (1–10, default 5).
+      top_n: Number of top videos to fetch (1–10, default 5).
 
     Returns:
       {
         "ok": bool,
         "channel_link": str,
-        "videos": [{"title", "url", "view_count", "like_count", ...}],
-        "output_path": str,   # relative path of the generated Prefab file
-        "bytes": int
+        "videos": [{"title", "url", "view_count", "like_count", "channel_title", "channel_url"}]
       }
     """
     top_n = max(1, min(int(top_n), 10))
@@ -275,15 +275,39 @@ def plot_channel_top_videos(channel_link: str, top_n: int = 5) -> dict:
     if not videos:
         return {"ok": False, "error": "No videos found for this channel."}
 
-    source = _build_video_chart_source(videos)
-    out = PROJECT_ROOT / "generated_video_views.py"
-    out.write_text(source, encoding="utf-8")
+    return {"ok": True, "channel_link": channel_link, "videos": videos}
 
+
+@mcp.tool(name="build_video_prefab_source")
+def build_video_prefab_source_tool(
+    input_path: str = "top_videos.txt",
+    output_filename: str = "generated_video_views.py",
+) -> dict:
+    """
+    Generate a Prefab scatter chart (views X-axis, likes Y-axis) from a sandbox video stats file.
+
+    Args:
+      input_path: Sandbox-relative input file (default "top_videos.txt").
+      output_filename: Output Python file written to the mcp/ folder (default "generated_video_views.py").
+
+    Returns:
+      {"ok": bool, "input_path": str, "output_path": str, "videos": int, "bytes": int}
+    """
+    input_file = _sandbox_rel_path(input_path)
+    if not input_file.is_file():
+        return {"ok": False, "error": f"Input file not found: {input_path}"}
+
+    rows = _parse_top_videos_file(input_file)
+    source = _build_video_chart_source(rows)
+    compile(source, str(PROJECT_ROOT / output_filename), "exec")
+
+    out = PROJECT_ROOT / output_filename
+    out.write_text(source, encoding="utf-8")
     return {
         "ok": True,
-        "channel_link": channel_link,
-        "videos": videos,
+        "input_path": str(input_file.relative_to(SANDBOX_ROOT.resolve())),
         "output_path": str(out.relative_to(PROJECT_ROOT)),
+        "videos": len(rows),
         "bytes": len(source.encode("utf-8")),
     }
 

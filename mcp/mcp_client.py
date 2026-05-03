@@ -42,13 +42,15 @@ TASK_TOP_CHANNELS = (
 )
 
 TASK_VIDEO_VIEWS = (
-    "Plot the top 5 videos by view count for the YouTube channel "
+    "Fetch the top 5 videos by view count for the YouTube channel "
     "'https://www.youtube.com/@3blue1brown'. "
-    "Call plot_channel_top_videos with that channel link, then give a FINAL_ANSWER "
-    "that mentions generated_video_views.py and lists every video with its view and like counts."
+    "Write the results to sandbox/top_videos.txt using the canonical format, "
+    "read the file back to confirm, then call build_video_prefab_source to generate "
+    "generated_video_views.py. Finish with FINAL_ANSWER listing every video title, "
+    "view count, and like count."
 )
 
-ACTIVE_TASK = TASK_TOP_CHANNELS  # ← change to TASK_VIDEO_VIEWS for the video chart
+ACTIVE_TASK = TASK_VIDEO_VIEWS  # ← change to TASK_VIDEO_VIEWS for the video chart
 # ─────────────────────────────────────────────────────────────────────────────
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -122,6 +124,53 @@ def format_channels_dump(channels: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+def extract_videos_from_payload(payload: str) -> list[dict] | None:
+    """Best-effort parse of get_top_video_stats tool payload."""
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    videos = data.get("videos")
+    if not isinstance(videos, list):
+        return None
+    normalized: list[dict] = []
+    for v in videos:
+        if not isinstance(v, dict):
+            continue
+        normalized.append(
+            {
+                "title": str(v.get("title", "")).strip(),
+                "url": str(v.get("url", "")).strip(),
+                "view_count": int(v.get("view_count", 0) or 0),
+                "like_count": int(v.get("like_count", 0) or 0),
+                "channel_title": str(v.get("channel_title", "")).strip(),
+                "channel_url": str(v.get("channel_url", "")).strip(),
+            }
+        )
+    return normalized or None
+
+
+def format_videos_dump(videos: list[dict]) -> str:
+    """Canonical dump format consumed by video_views_prefab.py parser."""
+    blocks: list[str] = []
+    for i, v in enumerate(videos, start=1):
+        blocks.append(
+            "\n".join(
+                [
+                    f"{i}. {v['title']}",
+                    f"URL: {v['url']}",
+                    f"Views: {v['view_count']}",
+                    f"Likes: {v['like_count']}",
+                    f"Channel: {v['channel_title']}",
+                    f"ChannelURL: {v['channel_url']}",
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
+
+
 async def main():
     server_params = StdioServerParameters(
         command="python",
@@ -170,9 +219,21 @@ Rules:
 - When the task is only listing channels (no file), FINAL_ANSWER must still list each channel as:
   [Title](url) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
 - When asked to plot top videos for a YouTube channel:
-  1) Call plot_channel_top_videos with the channel_link (and optional top_n).
-  2) FINAL_ANSWER must mention generated_video_views.py and list every video with
-     its title, view count, and like count.
+  1) Call get_top_video_stats with the channel_link (and optional top_n).
+  2) Call write_file using EXACT canonical format below (do not invent other formats):
+     1. <title>
+     URL: <url>
+     Views: <int>
+     Likes: <int>
+     Channel: <channel_title>
+     ChannelURL: <channel_url>
+     (blank line between videos)
+  3) Call read_file to verify the written content.
+  4) Call build_video_prefab_source with input_path="top_videos.txt" and
+     output_filename="generated_video_views.py".
+  5) FINAL_ANSWER must mention both files:
+     sandbox/top_videos.txt and generated_video_views.py
+     and list each video title with its view count and like count.
 - Do not invent tools or URLs; only use tool outputs.
 """
 
@@ -223,8 +284,8 @@ Rules:
                         if result.content and hasattr(result.content[0], "text")
                         else str(result)
                     )
-                    # Stabilize LLM outputs: after channel discovery, write a canonical dump format
-                    # so downstream plotting never depends on model formatting variability.
+                    # Stabilize LLM outputs: after channel/video discovery, write a canonical
+                    # dump so downstream chart generation never depends on model formatting.
                     if tool_name == "get_top_youtube_channels":
                         channels = extract_channels_from_payload(payload)
                         if channels:
@@ -232,6 +293,20 @@ Rules:
                             write_res = await session.call_tool(
                                 "write_file",
                                 {"path": "top_channels.txt", "content": canonical_text},
+                            )
+                            write_payload = (
+                                write_res.content[0].text
+                                if write_res.content and hasattr(write_res.content[0], "text")
+                                else str(write_res)
+                            )
+                            payload = f"{payload}\nAUTO_WRITE_FILE: {write_payload}"
+                    elif tool_name == "get_top_video_stats":
+                        videos = extract_videos_from_payload(payload)
+                        if videos:
+                            canonical_text = format_videos_dump(videos)
+                            write_res = await session.call_tool(
+                                "write_file",
+                                {"path": "top_videos.txt", "content": canonical_text},
                             )
                             write_payload = (
                                 write_res.content[0].text
