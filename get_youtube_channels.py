@@ -138,7 +138,7 @@ def get_top_youtube_channels(
     # Min-max normalize each metric independently to [0, 1] so that subscribers
     # (thousands), views (millions), and video count (hundreds) all contribute
     # equally to the final score regardless of their raw magnitude.
-    for key in ("subscribers", "views", "videos"):
+    for key in ("subscribers", "views"):
         vals = [ch[key] for ch in channels]
         lo, hi = min(vals), max(vals)
         span = hi - lo or 1  # avoid divide-by-zero when all values are identical
@@ -147,7 +147,7 @@ def get_top_youtube_channels(
 
     for ch in channels:
         ch["score"] = round(
-            (ch.pop("_subscribers_norm") + ch.pop("_views_norm") + ch.pop("_videos_norm")) / 3,
+            (ch.pop("_subscribers_norm") + ch.pop("_views_norm")) / 2,
             4,
         )
 
