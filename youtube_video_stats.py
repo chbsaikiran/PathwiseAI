@@ -39,31 +39,30 @@ def get_top_videos_with_stats(channel_link: str, top_n: int = 5) -> list[dict]:
     channel_id, channel_title, channel_url = _resolve_channel(api_key, channel_link)
     time.sleep(0.2)
 
-    # Step 1: dual search — viewCount pass for highest-viewed, then relevance pass
-    # as a supplemental sweep. Union ensures we don't miss highly relevant videos.
+    # Step 1: search ordered by viewCount; fetch more candidates than needed so the
+    # re-sort by real stats (step 2) has a decent pool to pick the true top_n from.
+    search_res = youtube_api_get(
+        SEARCH_URL,
+        {
+            "part": "snippet",
+            "type": "video",
+            "channelId": channel_id,
+            "order": "viewCount",
+            "maxResults": min(top_n * 3, 50),
+            "key": api_key,
+        },
+    )
+    _raise_if_error(search_res)
+    time.sleep(0.2)
+
     video_ids: list[str] = []
     title_by_id: dict[str, str] = {}
-
-    for order in ("viewCount", "relevance"):
-        search_res = youtube_api_get(
-            SEARCH_URL,
-            {
-                "part": "snippet",
-                "type": "video",
-                "channelId": channel_id,
-                "order": order,
-                "maxResults": max(top_n, 10),
-                "key": api_key,
-            },
-        )
-        _raise_if_error(search_res)
-        for it in search_res.get("items") or []:
-            vid = it.get("id", {}).get("videoId")
-            if not vid or vid in title_by_id:
-                continue
-            video_ids.append(vid)
-            title_by_id[vid] = (it.get("snippet") or {}).get("title", "")
-        time.sleep(0.2)
+    for it in search_res.get("items") or []:
+        vid = it.get("id", {}).get("videoId")
+        if not vid:
+            continue
+        video_ids.append(vid)
+        title_by_id[vid] = (it.get("snippet") or {}).get("title", "")
 
     if not video_ids:
         return []
@@ -106,4 +105,4 @@ def get_top_videos_with_stats(channel_link: str, top_n: int = 5) -> list[dict]:
             }
         )
     out.sort(key=lambda x: x["view_count"], reverse=True)
-    return out
+    return out[:top_n]
