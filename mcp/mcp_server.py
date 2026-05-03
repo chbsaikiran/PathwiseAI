@@ -17,14 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
-from channels_bubble_prefab import (
-    build_prefab_source as _build_prefab_source_template,
-    parse_top_channels_file as _parse_top_channels_file,
-)
-from video_views_prefab import (
-    build_video_chart_source as _build_video_chart_source,
-    parse_top_videos_file as _parse_top_videos_file,
-)
+from channels_bubble_prefab import parse_top_channels_file as _parse_top_channels_file
+from video_views_prefab import parse_top_videos_file as _parse_top_videos_file
+from plot_prefab import build_prefab_plot as _build_prefab_plot
 from get_youtube_channels import get_top_youtube_channels as _get_top_youtube_channels
 from youtube_channel_comments import analyze_channel_viewer_comments as _analyze_channel_viewer_comments
 from youtube_locale import effective_search_locale
@@ -123,33 +118,63 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = True) -> dict:
     }
 
 
-@mcp.tool(name="build_prefab_source")
-def build_prefab_source_tool(
-    input_path: str = "top_channels.txt",
-    output_filename: str = "generated_channels_bubble.py",
+@mcp.tool(name="build_prefab_plot")
+def build_prefab_plot_tool(
+    input_path: str,
+    title: str = "",
 ) -> dict:
     """
-    Generate a Prefab plot app from sandbox top-channels text using build_prefab_source().
+    Parse a sandbox data file and generate a Prefab chart as generated_plot.py.
+
+    The LLM inspects the field names and sample values, then picks the most
+    suitable chart type automatically:
+      - 3+ numeric fields  →  bubble chart (ScatterChart with z_axis)
+      - 2 numeric fields   →  scatter chart (ScatterChart, x vs y)
+
+    Accepts both top_channels.txt and top_videos.txt formats (auto-detected).
 
     Args:
-      input_path: Sandbox-relative input file (default "top_channels.txt").
-      output_filename: Output Python file in project root (default "generated_channels_bubble.py").
+      input_path: Sandbox-relative path to the data file
+                  (e.g. "top_channels.txt" or "top_videos.txt").
+      title: Chart title shown in the UI. Auto-derived from the file name if empty.
+
+    Returns:
+      {"ok": bool, "input_path": str, "detected_format": str,
+       "output_path": str, "rows": int, "bytes": int}
     """
     input_file = _sandbox_rel_path(input_path)
     if not input_file.is_file():
         return {"ok": False, "error": f"Input file not found: {input_path}"}
 
-    rows = _parse_top_channels_file(input_file)
-    source = _build_prefab_source_template(rows)
-    compile(source, str(PROJECT_ROOT / output_filename), "exec")
+    # Auto-detect format: try channels first, then videos.
+    rows = None
+    detected = "unknown"
+    try:
+        rows = _parse_top_channels_file(input_file)
+        detected = "channels"
+    except Exception:
+        pass
+    if not rows:
+        try:
+            rows = _parse_top_videos_file(input_file)
+            detected = "videos"
+        except Exception:
+            pass
+    if not rows:
+        return {"ok": False, "error": f"Could not parse {input_path} as channels or videos format."}
 
-    out = PROJECT_ROOT / output_filename
+    chart_title = title or ("Top YouTube Channels" if detected == "channels" else "Top Videos — Views vs Likes")
+    source = _build_prefab_plot(rows, chart_title)
+
+    out = PROJECT_ROOT / "generated_plot.py"
+    compile(source, str(out), "exec")
     out.write_text(source, encoding="utf-8")
     return {
         "ok": True,
         "input_path": str(input_file.relative_to(SANDBOX_ROOT.resolve())),
+        "detected_format": detected,
         "output_path": str(out.relative_to(PROJECT_ROOT)),
-        "channels": len(rows),
+        "rows": len(rows),
         "bytes": len(source.encode("utf-8")),
     }
 
@@ -277,39 +302,6 @@ def get_top_video_stats(channel_link: str, top_n: int = 5) -> dict:
 
     return {"ok": True, "channel_link": channel_link, "videos": videos}
 
-
-@mcp.tool(name="build_video_prefab_source")
-def build_video_prefab_source_tool(
-    input_path: str = "top_videos.txt",
-    output_filename: str = "generated_video_views.py",
-) -> dict:
-    """
-    Generate a Prefab scatter chart (views X-axis, likes Y-axis) from a sandbox video stats file.
-
-    Args:
-      input_path: Sandbox-relative input file (default "top_videos.txt").
-      output_filename: Output Python file written to the mcp/ folder (default "generated_video_views.py").
-
-    Returns:
-      {"ok": bool, "input_path": str, "output_path": str, "videos": int, "bytes": int}
-    """
-    input_file = _sandbox_rel_path(input_path)
-    if not input_file.is_file():
-        return {"ok": False, "error": f"Input file not found: {input_path}"}
-
-    rows = _parse_top_videos_file(input_file)
-    source = _build_video_chart_source(rows)
-    compile(source, str(PROJECT_ROOT / output_filename), "exec")
-
-    out = PROJECT_ROOT / output_filename
-    out.write_text(source, encoding="utf-8")
-    return {
-        "ok": True,
-        "input_path": str(input_file.relative_to(SANDBOX_ROOT.resolve())),
-        "output_path": str(out.relative_to(PROJECT_ROOT)),
-        "videos": len(rows),
-        "bytes": len(source.encode("utf-8")),
-    }
 
 
 if __name__ == "__main__":

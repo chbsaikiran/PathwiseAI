@@ -37,17 +37,17 @@ TASK_TOP_CHANNELS = (
     "Find top YouTube channels for the query 'CBSE Class 10 Maths' "
     "(English, region IN). Dump the full results into sandbox file top_channels.txt "
     "(include each channel's link, subscribers, views, videos uploaded, and score). "
-    "Then read the file back to confirm, call build_prefab_source to generate "
-    "generated_channels_bubble.py, and finish with FINAL_ANSWER."
+    "Then read the file back to confirm, call build_prefab_plot with "
+    "input_path='top_channels.txt' to generate generated_plot.py, and finish with FINAL_ANSWER."
 )
 
 TASK_VIDEO_VIEWS = (
     "Fetch the top 5 videos by view count for the YouTube channel "
     "'https://www.youtube.com/@3blue1brown'. "
     "Write the results to sandbox/top_videos.txt using the canonical format, "
-    "read the file back to confirm, then call build_video_prefab_source to generate "
-    "generated_video_views.py. Finish with FINAL_ANSWER listing every video title, "
-    "view count, and like count."
+    "read the file back to confirm, then call build_prefab_plot with "
+    "input_path='top_videos.txt' to generate generated_plot.py. "
+    "Finish with FINAL_ANSWER listing every video title, view count, and like count."
 )
 
 ACTIVE_TASK = TASK_VIDEO_VIEWS  # ← change to TASK_VIDEO_VIEWS for the video chart
@@ -201,9 +201,9 @@ Rules:
 - Use JSON for FUNCTION_CALL exactly as shown (double quotes).
 - Paths for write_file/read_file/edit_file are relative to the server sandbox folder only
   (e.g. "top_channels.txt") — no leading slash, no "..".
-- When asked to dump top channels to a file:
+- When asked to dump top channels and plot:
   1) Call get_top_youtube_channels with the user's query (and locale args if given).
-  2) Call write_file using EXACT canonical format below (do not invent other formats):
+  2) Call write_file using EXACT canonical format (do not invent other formats):
      1. <title>
      URL: <url>
      Subscribers: <int>
@@ -212,15 +212,14 @@ Rules:
      Score: <float>
      (blank line between channels)
   3) Call read_file to verify the written content.
-  4) Call build_prefab_source with input_path="top_channels.txt" and
-     output_filename="generated_channels_bubble.py".
-  5) FINAL_ANSWER must mention both files:
-     sandbox/top_channels.txt and generated_channels_bubble.py
-- When the task is only listing channels (no file), FINAL_ANSWER must still list each channel as:
+  4) Call build_prefab_plot with input_path="top_channels.txt".
+     It auto-detects 3 numeric fields and picks a bubble chart.
+  5) FINAL_ANSWER must mention sandbox/top_channels.txt and generated_plot.py.
+- When the task is only listing channels (no file), FINAL_ANSWER must list each channel as:
   [Title](url) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
 - When asked to plot top videos for a YouTube channel:
   1) Call get_top_video_stats with the channel_link (and optional top_n).
-  2) Call write_file using EXACT canonical format below (do not invent other formats):
+  2) Call write_file using EXACT canonical format:
      1. <title>
      URL: <url>
      Views: <int>
@@ -229,10 +228,9 @@ Rules:
      ChannelURL: <channel_url>
      (blank line between videos)
   3) Call read_file to verify the written content.
-  4) Call build_video_prefab_source with input_path="top_videos.txt" and
-     output_filename="generated_video_views.py".
-  5) FINAL_ANSWER must mention both files:
-     sandbox/top_videos.txt and generated_video_views.py
+  4) Call build_prefab_plot with input_path="top_videos.txt".
+     It auto-detects 2 numeric fields and picks a scatter chart.
+  5) FINAL_ANSWER must mention sandbox/top_videos.txt and generated_plot.py
      and list each video title with its view count and like count.
 - Do not invent tools or URLs; only use tool outputs.
 """
