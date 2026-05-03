@@ -140,8 +140,9 @@ def _extract_python(text: str) -> str:
 def _looks_valid(source: str) -> bool:
     if not source.strip():
         return False
-    forbidden = ["@app.page(", "def index(", "app = PrefabApp(", "style={"]
-    required = ["from prefab_ui.app import PrefabApp", "with PrefabApp("]
+    forbidden = ["@app.page(", "def index(", "app = PrefabApp(", "style={",
+                 "x_key=", "y_key=", "z_key=", "fill_key="]
+    required = ["from prefab_ui.app import PrefabApp", "with PrefabApp(", "x_axis=", "y_axis="]
     return not any(t in source for t in forbidden) and all(t in source for t in required)
 
 
@@ -176,6 +177,20 @@ Chart selection rule — choose based on how many numeric fields are present:
 - Exactly 2 numeric fields  →  ScatterChart with x_axis and y_axis only (no z_axis)
 Pick the 2 or 3 most meaningful numeric fields (prefer large-magnitude counts over
 small ratios like score/0-1 values).
+
+EXACT ScatterChart constructor — use ONLY these parameter names (no others):
+  ScatterChart(
+      data=data,
+      series=[ChartSeries(data_key="_hover", label="<label_field>")],
+      x_axis="<field_name>",   # required
+      y_axis="<field_name>",   # required
+      z_axis="<field_name>",   # only for bubble chart (3+ numeric fields)
+      height=480,
+      show_legend=True,
+      show_tooltip=True,
+      show_grid=True,
+  )
+DO NOT use x_key, y_key, z_key, fill_key, or any other parameter names.
 
 Requirements:
 1. Use ONLY these imports:

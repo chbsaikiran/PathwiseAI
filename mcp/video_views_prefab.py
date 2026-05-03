@@ -95,8 +95,6 @@ def generate_app_from_file(input_path: Path) -> int:
     if not rows:
         raise SystemExit("No video rows parsed — nothing to plot.")
     source = build_video_chart_source(rows)
-    if not _looks_like_supported_video_chart_source(source):
-        source = _build_video_chart_source_fallback(rows)
     compile(source, str(GENERATED), "exec")
     GENERATED.write_text(source, encoding="utf-8")
     return len(rows)
@@ -105,8 +103,6 @@ def generate_app_from_file(input_path: Path) -> int:
 def generate_app_from_videos(videos: list[dict]) -> None:
     """Write the generated Prefab app to GENERATED."""
     source = build_video_chart_source(videos)
-    if not _looks_like_supported_video_chart_source(source):
-        source = _build_video_chart_source_fallback(videos)
     compile(source, str(GENERATED), "exec")
     GENERATED.write_text(source, encoding="utf-8")
 
