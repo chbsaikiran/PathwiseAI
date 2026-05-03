@@ -34,7 +34,7 @@ LLM_TIMEOUT = 60
 # Switch ACTIVE_TASK to choose which prompt the agent runs.
 
 TASK_TOP_CHANNELS = (
-    "Find top YouTube channels for the query 'CBSE Class 10 Maths' "
+    "Find top YouTube channels for the query 'Deep Learning and ML' "
     "(English, region IN). Dump the full results into sandbox file top_channels.txt "
     "(include each channel's link, subscribers, views, videos uploaded, and score). "
     "Then read the file back to confirm, call build_prefab_plot with "
@@ -43,7 +43,7 @@ TASK_TOP_CHANNELS = (
 
 TASK_VIDEO_VIEWS = (
     "Fetch the top 5 videos by view count for the YouTube channel "
-    "'https://www.youtube.com/@3blue1brown'. "
+    "'https://www.youtube.com/@HareKrishnaGoldenTempleHyd'. "
     "Write the results to sandbox/top_videos.txt using the canonical format, "
     "read the file back to confirm, then call build_prefab_plot with "
     "input_path='top_videos.txt' to generate generated_plot.py. "

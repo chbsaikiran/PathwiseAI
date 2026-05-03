@@ -39,29 +39,31 @@ def get_top_videos_with_stats(channel_link: str, top_n: int = 5) -> list[dict]:
     channel_id, channel_title, channel_url = _resolve_channel(api_key, channel_link)
     time.sleep(0.2)
 
-    # Step 1: search.list ordered by viewCount to get video IDs.
-    search_res = youtube_api_get(
-        SEARCH_URL,
-        {
-            "part": "snippet",
-            "type": "video",
-            "channelId": channel_id,
-            "order": "viewCount",
-            "maxResults": top_n,
-            "key": api_key,
-        },
-    )
-    _raise_if_error(search_res)
-
-    items = search_res.get("items") or []
+    # Step 1: dual search — viewCount pass for highest-viewed, then relevance pass
+    # as a supplemental sweep. Union ensures we don't miss highly relevant videos.
     video_ids: list[str] = []
     title_by_id: dict[str, str] = {}
-    for it in items:
-        vid = it.get("id", {}).get("videoId")
-        if not vid:
-            continue
-        video_ids.append(vid)
-        title_by_id[vid] = (it.get("snippet") or {}).get("title", "")
+
+    for order in ("viewCount", "relevance"):
+        search_res = youtube_api_get(
+            SEARCH_URL,
+            {
+                "part": "snippet",
+                "type": "video",
+                "channelId": channel_id,
+                "order": order,
+                "maxResults": max(top_n, 10),
+                "key": api_key,
+            },
+        )
+        _raise_if_error(search_res)
+        for it in search_res.get("items") or []:
+            vid = it.get("id", {}).get("videoId")
+            if not vid or vid in title_by_id:
+                continue
+            video_ids.append(vid)
+            title_by_id[vid] = (it.get("snippet") or {}).get("title", "")
+        time.sleep(0.2)
 
     if not video_ids:
         return []

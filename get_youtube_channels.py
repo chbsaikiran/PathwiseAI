@@ -46,31 +46,45 @@ def get_top_youtube_channels(
         raise RuntimeError("YOUTUBE_API_KEY not set. Add it to your .env file.")
 
     all_channel_ids = set()
-    next_page_token = None
 
+    # Primary pass: multiple pages ordered by viewCount (best proxy for subscriber count).
+    next_page_token = None
     for _ in range(max_pages):
         params = {
             "part": "snippet",
             "q": query,
             "type": "channel",
-            "order": "viewCount",   # best API proxy for subscriber count
+            "order": "viewCount",
             "maxResults": 25,
             "key": api_key,
             "pageToken": next_page_token,
         }
         apply_search_locale(params, relevance_language, region_code)
-
         res = youtube_api_get(SEARCH_URL, params)
         _raise_if_youtube_error(res)
-
         for item in res.get("items", []):
             all_channel_ids.add(item["snippet"]["channelId"])
-
         next_page_token = res.get("nextPageToken")
         if not next_page_token:
             break
-
         time.sleep(0.25)
+
+    # Supplemental pass: one page ordered by relevance to capture highly relevant
+    # channels that may not rank high by total view count.
+    time.sleep(0.25)
+    params = {
+        "part": "snippet",
+        "q": query,
+        "type": "channel",
+        "order": "relevance",
+        "maxResults": 25,
+        "key": api_key,
+    }
+    apply_search_locale(params, relevance_language, region_code)
+    res = youtube_api_get(SEARCH_URL, params)
+    _raise_if_youtube_error(res)
+    for item in res.get("items", []):
+        all_channel_ids.add(item["snippet"]["channelId"])
 
     channel_ids_list = list(all_channel_ids)
     channels = []
