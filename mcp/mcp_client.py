@@ -35,7 +35,15 @@ LLM_TIMEOUT = 60
 # Switch ACTIVE_TASK to choose which prompt the agent runs.
 
 TASK_TOP_CHANNELS = (
-    "Find top YouTube channels for the query 'Reinforcement Learning' "
+    "Find top YouTube channels for the query 'Agentic AI' "
+    "(English, region IN). Dump the full results into sandbox file top_channels.txt "
+    "(include each channel's link, subscribers, views, videos uploaded, and score). "
+    "Then read the file back to confirm, call build_prefab_plot with "
+    "input_path='top_channels.txt' to generate generated_plot.py, and finish with FINAL_ANSWER."
+)
+
+TASK_TOP_CHANNELS_AND_VIDEOS = (
+    "Find top YouTube channels for the query 'Agentic AI' "
     "(English, region IN). Dump the full results into sandbox file top_channels.txt "
     "(include each channel's link, subscribers, views, videos uploaded, and score). "
     "Fetch the top 5 videos by view count for the top most channel in the above "
@@ -53,7 +61,7 @@ TASK_VIDEO_VIEWS = (
     "Finish with FINAL_ANSWER listing every video title, view count, and like count."
 )
 
-ACTIVE_TASK = TASK_TOP_CHANNELS  # ← change to TASK_VIDEO_VIEWS for the video chart
+ACTIVE_TASK = TASK_TOP_CHANNELS_AND_VIDEOS  # ← change to TASK_VIDEO_VIEWS for the video chart
 # ─────────────────────────────────────────────────────────────────────────────
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -151,22 +159,109 @@ async def main():
             tools_desc = describe_tools(tools)
             print(f"Loaded {len(tools)} tools\n")
 
-            system_prompt = f"""You are an agent with YouTube discovery tools, sandbox file tools, and a Prefab chart generator.
-Call ONE tool per response.
+            system_prompt = f"""
+You are an agent with YouTube discovery tools, sandbox file tools, and a Prefab chart generator.
+
+Call EXACTLY ONE tool per response.
 
 Available tools:
 {tools_desc}
 
-Response format — exactly one of:
-  FUNCTION_CALL: {{"tool_name": "<name>", "tool_arguments": {{...}}}}
-  FINAL_ANSWER: <summary>
+You must reason step-by-step internally before acting, but NEVER expose your reasoning.
 
-Rules:
-- After get_top_youtube_channels or get_top_video_stats, the sandbox file is written automatically.
-  Call read_file to confirm, then build_prefab_plot to generate the chart, then FINAL_ANSWER.
-- Sandbox paths are relative (e.g. "top_channels.txt") — no ".." or leading slash.
-- FINAL_ANSWER must name the sandbox file and generated_plot.py, and list each result item.
-- Only use tool outputs — never invent URLs or data.
+========================
+OUTPUT FORMAT RULES
+========================
+
+Your response MUST be EXACTLY ONE of these:
+
+FUNCTION_CALL: {{"tool_name":"<name>","tool_arguments":{{...}}}}
+
+OR
+
+FINAL_ANSWER: <summary>
+
+Do NOT output:
+- THOUGHT
+- REASONING_TYPE
+- explanations
+- markdown
+- code fences
+- extra text
+
+The response MUST start with either:
+- FUNCTION_CALL:
+- FINAL_ANSWER:
+
+========================
+WORKFLOW RULES
+========================
+
+1. Use only ONE tool call per response.
+
+2. After:
+   - get_top_youtube_channels
+   - get_top_video_stats
+
+   the sandbox file is automatically written.
+
+3. Always validate generated files using read_file before proceeding.
+
+4. Before using any file:
+   - ensure it exists
+   - ensure it is non-empty
+   - ensure expected fields are present
+
+5. Only call build_prefab_plot after successful validation.
+
+6. Sandbox paths:
+   - must be relative
+   - must NOT contain ".."
+   - must NOT start with "/"
+
+7. FINAL_ANSWER must:
+   - mention all generated sandbox files
+   - mention generated_plot.py
+   - summarize all retrieved results
+
+8. Only use tool outputs.
+   Never invent:
+   - URLs
+   - subscriber counts
+   - views
+   - filenames
+   - statistics
+
+========================
+ERROR HANDLING
+========================
+
+If:
+- a tool fails
+- a file is missing
+- data is malformed
+- results are empty
+
+Then:
+
+1. Retry once if appropriate.
+
+2. If recovery fails:
+   output ONLY:
+
+FINAL_ANSWER: Failed because <short reason>
+
+3. Never hallucinate missing data.
+
+========================
+EXECUTION POLICY
+========================
+
+- Prefer deterministic actions.
+- Follow task order exactly.
+- Never skip validation.
+- Never call multiple tools together.
+- Never answer from prior knowledge.
 """
 
             task = ACTIVE_TASK
