@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from google import genai
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -34,11 +35,13 @@ LLM_TIMEOUT = 60
 # Switch ACTIVE_TASK to choose which prompt the agent runs.
 
 TASK_TOP_CHANNELS = (
-    "Find top YouTube channels for the query 'Deep Learning and ML' "
+    "Find top YouTube channels for the query 'Reinforcement Learning' "
     "(English, region IN). Dump the full results into sandbox file top_channels.txt "
     "(include each channel's link, subscribers, views, videos uploaded, and score). "
-    "Then read the file back to confirm, call build_prefab_plot with "
-    "input_path='top_channels.txt' to generate generated_plot.py, and finish with FINAL_ANSWER."
+    "Fetch the top 5 videos by view count for the top most channel in the above "
+    "Write the results to sandbox/top_videos.txt using the canonical format, "
+    "read the file back to confirm, then call build_prefab_plot with "
+    "input_path='top_videos.txt' to generate generated_plot.py, and finish with FINAL_ANSWER."
 )
 
 TASK_VIDEO_VIEWS = (
@@ -50,10 +53,28 @@ TASK_VIDEO_VIEWS = (
     "Finish with FINAL_ANSWER listing every video title, view count, and like count."
 )
 
-ACTIVE_TASK = TASK_VIDEO_VIEWS  # ← change to TASK_VIDEO_VIEWS for the video chart
+ACTIVE_TASK = TASK_TOP_CHANNELS  # ← change to TASK_VIDEO_VIEWS for the video chart
 # ─────────────────────────────────────────────────────────────────────────────
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+
+class ChannelData(BaseModel):
+    title: str = ""
+    url: str = ""
+    subscribers: int = 0
+    views: int = 0
+    videos: int = 0
+    score: float = 0.0
+
+
+class VideoData(BaseModel):
+    title: str = ""
+    url: str = ""
+    view_count: int = 0
+    like_count: int = 0
+    channel_title: str = ""
+    channel_url: str = ""
 
 
 async def generate_with_timeout(prompt: str, timeout: int = LLM_TIMEOUT):
@@ -77,97 +98,41 @@ def describe_tools(tools) -> str:
     return "\n".join(lines)
 
 
-def extract_channels_from_payload(payload: str) -> list[dict] | None:
-    """Best-effort parse of get_top_youtube_channels tool text payload."""
+def extract_channels_from_payload(payload: str) -> list[ChannelData] | None:
     try:
         data = json.loads(payload)
+        items = data.get("channels", []) if isinstance(data, dict) else []
+        result = [ChannelData.model_validate(ch) for ch in items if isinstance(ch, dict)]
+        return result or None
     except Exception:
         return None
-    if not isinstance(data, dict):
-        return None
-    channels = data.get("channels")
-    if not isinstance(channels, list):
-        return None
-    normalized: list[dict] = []
-    for ch in channels:
-        if not isinstance(ch, dict):
-            continue
-        normalized.append(
-            {
-                "title": str(ch.get("title", "")).strip(),
-                "url": str(ch.get("url", "")).strip(),
-                "subscribers": int(ch.get("subscribers", 0) or 0),
-                "views": int(ch.get("views", 0) or 0),
-                "videos": int(ch.get("videos", 0) or 0),
-                "score": float(ch.get("score", 0.0) or 0.0),
-            }
-        )
-    return normalized or None
 
 
-def format_channels_dump(channels: list[dict]) -> str:
-    """Canonical dump format consumed by channels_bubble_prefab.py parser."""
-    blocks: list[str] = []
-    for i, ch in enumerate(channels, start=1):
-        blocks.append(
-            "\n".join(
-                [
-                    f"{i}. {ch['title']}",
-                    f"URL: {ch['url']}",
-                    f"Subscribers: {ch['subscribers']}",
-                    f"Views: {ch['views']}",
-                    f"Videos: {ch['videos']}",
-                    f"Score: {ch['score']:.4f}",
-                ]
-            )
-        )
+def format_channels_dump(channels: list[ChannelData]) -> str:
+    blocks = [
+        f"{i}. {ch.title}\nURL: {ch.url}\nSubscribers: {ch.subscribers}\n"
+        f"Views: {ch.views}\nVideos: {ch.videos}\nScore: {ch.score:.4f}"
+        for i, ch in enumerate(channels, 1)
+    ]
     return "\n\n".join(blocks)
 
 
-def extract_videos_from_payload(payload: str) -> list[dict] | None:
-    """Best-effort parse of get_top_video_stats tool payload."""
+def extract_videos_from_payload(payload: str) -> list[VideoData] | None:
     try:
         data = json.loads(payload)
+        items = data.get("videos", []) if isinstance(data, dict) else []
+        result = [VideoData.model_validate(v) for v in items if isinstance(v, dict)]
+        return result or None
     except Exception:
         return None
-    if not isinstance(data, dict):
-        return None
-    videos = data.get("videos")
-    if not isinstance(videos, list):
-        return None
-    normalized: list[dict] = []
-    for v in videos:
-        if not isinstance(v, dict):
-            continue
-        normalized.append(
-            {
-                "title": str(v.get("title", "")).strip(),
-                "url": str(v.get("url", "")).strip(),
-                "view_count": int(v.get("view_count", 0) or 0),
-                "like_count": int(v.get("like_count", 0) or 0),
-                "channel_title": str(v.get("channel_title", "")).strip(),
-                "channel_url": str(v.get("channel_url", "")).strip(),
-            }
-        )
-    return normalized or None
 
 
-def format_videos_dump(videos: list[dict]) -> str:
-    """Canonical dump format consumed by video_views_prefab.py parser."""
-    blocks: list[str] = []
-    for i, v in enumerate(videos, start=1):
-        blocks.append(
-            "\n".join(
-                [
-                    f"{i}. {v['title']}",
-                    f"URL: {v['url']}",
-                    f"Views: {v['view_count']}",
-                    f"Likes: {v['like_count']}",
-                    f"Channel: {v['channel_title']}",
-                    f"ChannelURL: {v['channel_url']}",
-                ]
-            )
-        )
+def format_videos_dump(videos: list[VideoData]) -> str:
+    blocks = [
+        f"{i}. {v.title}\nURL: {v.url}\nViews: {v.view_count}\n"
+        f"Likes: {v.like_count}\nChannel: {v.channel_title}\nChannelURL: {v.channel_url}"
+        for i, v in enumerate(videos, 1)
+    ]
     return "\n\n".join(blocks)
 
 
@@ -186,53 +151,22 @@ async def main():
             tools_desc = describe_tools(tools)
             print(f"Loaded {len(tools)} tools\n")
 
-            system_prompt = f"""You are an agent with YouTube discovery tools, sandbox file tools, and a Prefab generation tool.
+            system_prompt = f"""You are an agent with YouTube discovery tools, sandbox file tools, and a Prefab chart generator.
+Call ONE tool per response.
 
-You solve tasks by calling tools ONE AT A TIME and observing their results.
-
-Available tools (names and parameters):
+Available tools:
 {tools_desc}
 
-You must respond with EXACTLY ONE line, in one of these two formats:
+Response format — exactly one of:
   FUNCTION_CALL: {{"tool_name": "<name>", "tool_arguments": {{...}}}}
-  FINAL_ANSWER: <summary of what you did>
+  FINAL_ANSWER: <summary>
 
 Rules:
-- Use JSON for FUNCTION_CALL exactly as shown (double quotes).
-- Paths for write_file/read_file/edit_file are relative to the server sandbox folder only
-  (e.g. "top_channels.txt") — no leading slash, no "..".
-- When asked to dump top channels and plot:
-  1) Call get_top_youtube_channels with the user's query (and locale args if given).
-  2) Call write_file using EXACT canonical format (do not invent other formats):
-     1. <title>
-     URL: <url>
-     Subscribers: <int>
-     Views: <int>
-     Videos: <int>
-     Score: <float>
-     (blank line between channels)
-  3) Call read_file to verify the written content.
-  4) Call build_prefab_plot with input_path="top_channels.txt".
-     It auto-detects 3 numeric fields and picks a bubble chart.
-  5) FINAL_ANSWER must mention sandbox/top_channels.txt and generated_plot.py.
-- When the task is only listing channels (no file), FINAL_ANSWER must list each channel as:
-  [Title](url) | Subscribers: <n> | Views: <n> | Videos: <n> | Score: <n>
-- When asked to plot top videos for a YouTube channel:
-  1) Call get_top_video_stats with the channel_link (and optional top_n).
-  2) Call write_file using EXACT canonical format:
-     1. <title>
-     URL: <url>
-     Views: <int>
-     Likes: <int>
-     Channel: <channel_title>
-     ChannelURL: <channel_url>
-     (blank line between videos)
-  3) Call read_file to verify the written content.
-  4) Call build_prefab_plot with input_path="top_videos.txt".
-     It auto-detects 2 numeric fields and picks a scatter chart.
-  5) FINAL_ANSWER must mention sandbox/top_videos.txt and generated_plot.py
-     and list each video title with its view count and like count.
-- Do not invent tools or URLs; only use tool outputs.
+- After get_top_youtube_channels or get_top_video_stats, the sandbox file is written automatically.
+  Call read_file to confirm, then build_prefab_plot to generate the chart, then FINAL_ANSWER.
+- Sandbox paths are relative (e.g. "top_channels.txt") — no ".." or leading slash.
+- FINAL_ANSWER must name the sandbox file and generated_plot.py, and list each result item.
+- Only use tool outputs — never invent URLs or data.
 """
 
             task = ACTIVE_TASK

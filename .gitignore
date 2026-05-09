@@ -53,3 +53,4 @@ sandbox/*
 # Prefab generated app + logs
 generated_channels_bubble.py
 prefab_channels_bubble.log
+.claude

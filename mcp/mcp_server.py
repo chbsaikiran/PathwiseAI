@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
 
 from channels_bubble_prefab import parse_top_channels_file as _parse_top_channels_file
 from video_views_prefab import parse_top_videos_file as _parse_top_videos_file
@@ -178,22 +179,18 @@ def build_prefab_plot_tool(
         "bytes": len(source.encode("utf-8")),
     }
 
+class ChannelOut(BaseModel):
+    title: str = ""
+    channel_id: str = ""
+    url: str = ""
+    subscribers: int = 0
+    views: int = 0
+    videos: int = 0
+    score: float = 0.0
+
+
 def _normalize_channels(channels: list[dict]) -> list[dict]:
-    """Return stable channel schema for MCP clients."""
-    normalized: list[dict] = []
-    for ch in channels:
-        normalized.append(
-            {
-                "title": ch.get("title", ""),
-                "channel_id": ch.get("channel_id", ""),
-                "url": ch.get("url", ""),
-                "subscribers": int(ch.get("subscribers", 0) or 0),
-                "views": int(ch.get("views", 0) or 0),
-                "videos": int(ch.get("videos", 0) or 0),
-                "score": float(ch.get("score", 0.0) or 0.0),
-            }
-        )
-    return normalized
+    return [ChannelOut.model_validate(ch).model_dump() for ch in channels]
 
 
 @mcp.tool()
